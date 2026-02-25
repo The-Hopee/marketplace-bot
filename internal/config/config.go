@@ -8,38 +8,48 @@ import (
 )
 
 type Config struct {
-	TelegramToken     string
-	DatabasePath      string
-	SubscriptionPrice int
-	FreeSearchLimit   int
-	AdminID           int64
-	ProxyURL          string
-	Debug             bool
+	// Telegram
+	TelegramToken string
+
+	// Database
+	DatabaseURL string
+
+	// T-Bank (Tinkoff)
+	TBankTerminalKey string
+	TBankSecretKey   string
+	TBankBaseURL     string
+
+	// Subscription
+	SubscriptionPrice int64 // в копейках
+	SubscriptionDays  int
+
+	// Server
+	WebhookURL string
+	ServerPort string
 }
 
 func Load() (*Config, error) {
 	_ = godotenv.Load()
 
-	adminID, _ := strconv.ParseInt(os.Getenv("ADMIN_ID"), 10, 64)
-	freeLimit, _ := strconv.Atoi(os.Getenv("FREE_SEARCH_LIMIT"))
-	if freeLimit == 0 {
-		freeLimit = 5
-	}
+	price, _ := strconv.ParseInt(getEnv("SUBSCRIPTION_PRICE", "10000"), 10, 64) // 100 рублей = 10000 копеек
+	days, _ := strconv.Atoi(getEnv("SUBSCRIPTION_DAYS", "30"))
 
 	return &Config{
-		TelegramToken:     os.Getenv("TELEGRAM_BOT_TOKEN"),
-		DatabasePath:      getEnvOrDefault("DATABASE_PATH", "./bot.db"),
-		SubscriptionPrice: 399,
-		FreeSearchLimit:   freeLimit,
-		AdminID:           adminID,
-		ProxyURL:          os.Getenv("PROXY_URL"),
-		Debug:             os.Getenv("DEBUG") == "true",
+		TelegramToken:     os.Getenv("TELEGRAM_TOKEN"),
+		DatabaseURL:       os.Getenv("DATABASE_URL"),
+		TBankTerminalKey:  os.Getenv("TBANK_TERMINAL_KEY"),
+		TBankSecretKey:    os.Getenv("TBANK_SECRET_KEY"),
+		TBankBaseURL:      getEnv("TBANK_BASE_URL", "https://securepay.tinkoff.ru/v2"),
+		SubscriptionPrice: price,
+		SubscriptionDays:  days,
+		WebhookURL:        os.Getenv("WEBHOOK_URL"),
+		ServerPort:        getEnv("SERVER_PORT", "8080"),
 	}, nil
 }
 
-func getEnvOrDefault(key, defaultVal string) string {
-	if val := os.Getenv(key); val != "" {
-		return val
+func getEnv(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
 	}
-	return defaultVal
+	return defaultValue
 }

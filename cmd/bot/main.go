@@ -1,4 +1,4 @@
-package bot
+package main
 
 import (
 	"context"
@@ -7,51 +7,53 @@ import (
 	"os/signal"
 	"syscall"
 
-	"The-Hopee/marketplace-bot/internal/bot"
-	"The-Hopee/marketplace-bot/internal/config"
-	"The-Hopee/marketplace-bot/internal/database"
+	"marketplace-bot/internal/bot"
+	"marketplace-bot/internal/config"
+	"marketplace-bot/internal/database"
 )
 
 func main() {
 	// Загружаем конфигурацию
 	cfg, err := config.Load()
 	if err != nil {
-		log.Fatalf("Ошибка загрузки конфигурации: %v", err)
+		log.Fatalf("Failed to load config: %v", err)
 	}
 
-	if cfg.TelegramToken == "" {
-		log.Fatal("TELEGRAM_BOT_TOKEN не установлен")
-	}
-
-	// Подключаемся к БД
-	db, err := database.New(cfg.DatabasePath)
+	// Подключаемся к базе данных
+	db, err := database.NewDB(cfg.DatabaseURL)
 	if err != nil {
-		log.Fatalf("Ошибка подключения к БД: %v", err)
+		log.Fatalf("Failed to connect to database: %v", err)
 	}
 	defer db.Close()
 
-	// Создаём бота
-	b, err := bot.New(cfg, db)
+	// Выполняем миграции
+	ctx := context.Background()
+	if err := db.Migrate(ctx); err != nil {
+		log.Fatalf("Failed to run migrations: %v", err)
+	}
+	log.Println("Database migrations completed")
+
+	// Создаем и запускаем бота
+	telegramBot, err := bot.New(cfg, db)
 	if err != nil {
-		log.Fatalf("Ошибка создания бота: %v", err)
+		log.Fatalf("Failed to create bot: %v", err)
 	}
 
 	// Graceful shutdown
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	go func() {
-		sigChan := make(chan os.Signal, 1)
-		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-		<-sigChan
-		log.Println("Получен сигнал завершения, останавливаем бота...")
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		<-sigCh
+		log.Println("Shutting down...")
 		cancel()
 	}()
 
-	// Запускаем бота
-	if err := b.Start(ctx); err != nil && err != context.Canceled {
-		log.Fatalf("Ошибка работы бота: %v", err)
+	if err := telegramBot.Start(ctx); err != nil && err != context.Canceled {
+		log.Fatalf("Bot error: %v", err)
 	}
 
-	log.Println("Бот остановлен")
+	log.Println("Bot stopped")
 }
