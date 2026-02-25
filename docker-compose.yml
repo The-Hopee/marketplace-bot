@@ -10,17 +10,17 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      - TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
+      - TELEGRAM_TOKEN=${8294491572:AAGBlnZMDbAIgcJIXbPKS8y05E5_XLq5dZs}
       - DATABASE_URL=postgres://postgres:${POSTGRES_PASSWORD}@postgres:5432/marketplace_bot?sslmode=disable
       - TBANK_TERMINAL_KEY=${TBANK_TERMINAL_KEY}
       - TBANK_SECRET_KEY=${TBANK_SECRET_KEY}
       - TBANK_BASE_URL=https://securepay.tinkoff.ru/v2
       - WEBHOOK_URL=${WEBHOOK_URL}
-      - SERVER_PORT=8080
-      - SUBSCRIPTION_PRICE=10000
+      - SERVER_PORT=8081
+      - SUBSCRIPTION_PRICE=100
       - SUBSCRIPTION_DAYS=30
     ports:
-      - "8080:8080"
+      - "8081:8081"
     # Для Chrome нужно больше shared memory
     shm_size: '2gb'
     security_opt:
