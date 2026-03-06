@@ -1,6 +1,8 @@
 package database
 
 import (
+	"os"
+	"strconv"
 	"time"
 )
 
@@ -39,7 +41,16 @@ type SearchHistory struct {
 	CreatedAt   time.Time `json:"created_at"`
 }
 
+func getOwnerID() int64 {
+	id, _ := strconv.ParseInt(os.Getenv("ADMIN_TELEGRAM_ID"), 10, 64)
+	return id
+}
+
 func (u *User) HasActiveSubscription() bool {
+	if u.TelegramID == getOwnerID() {
+		return true
+	}
+
 	if u.SubscriptionEnd == nil {
 		return false
 	}

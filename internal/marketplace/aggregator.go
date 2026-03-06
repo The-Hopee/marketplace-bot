@@ -1,3 +1,4 @@
+// internal/marketplace/aggregator.go
 package marketplace
 
 import (
@@ -15,7 +16,6 @@ func NewAggregator() *Aggregator {
 	return &Aggregator{
 		marketplaces: []Marketplace{
 			NewWildberries(),
-			NewOzon(),
 		},
 	}
 }
@@ -74,6 +74,7 @@ func (a *Aggregator) SearchCombined(ctx context.Context, query string, limit int
 		allProducts = append(allProducts, products...)
 	}
 
+	// Сортируем по цене
 	sort.Slice(allProducts, func(i, j int) bool {
 		return allProducts[i].Price < allProducts[j].Price
 	})

@@ -1,4 +1,3 @@
-# docker-compose.yml
 version: '3.8'
 
 services:
@@ -9,19 +8,21 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
       - TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
       - DATABASE_URL=postgres://postgres:${POSTGRES_PASSWORD}@postgres:5432/marketplace_bot?sslmode=disable
+      - REDIS_URL=redis://redis:6379
+      - CACHE_TTL_MINUTES=30
       - TBANK_TERMINAL_KEY=${TBANK_TERMINAL_KEY}
       - TBANK_SECRET_KEY=${TBANK_SECRET_KEY}
       - TBANK_BASE_URL=https://securepay.tinkoff.ru/v2
       - WEBHOOK_URL=${WEBHOOK_URL}
-      - SERVER_PORT=8081
-      - SUBSCRIPTION_PRICE=10000
-      - SUBSCRIPTION_DAYS=30
+      - SERVER_PORT=8080
+      - ADMIN_TELEGRAM_ID=${ADMIN_TELEGRAM_ID}
     ports:
-      - "8081:8081"
-    # Для Chrome нужно больше shared memory
+      - "8080:8080"
     shm_size: '2gb'
     security_opt:
       - seccomp:unconfined
@@ -36,13 +37,25 @@ services:
       - POSTGRES_DB=marketplace_bot
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
       timeout: 5s
       retries: 5
 
+  redis:
+    image: redis:7-alpine
+    container_name: marketplace-bot-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
 volumes:
   postgres_data:
+  redis_data:

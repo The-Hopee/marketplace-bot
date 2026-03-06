@@ -1,46 +1,34 @@
-// internal/bot/keyboards.go
 package bot
 
-import (
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
-)
+import tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 
 func MainMenuKeyboard() tgbotapi.ReplyKeyboardMarkup {
-	return tgbotapi.NewReplyKeyboard(
+	keyboard := tgbotapi.NewReplyKeyboard(
 		tgbotapi.NewKeyboardButtonRow(
 			tgbotapi.NewKeyboardButton("🔍 Поиск товаров"),
+			tgbotapi.NewKeyboardButton("📷 Поиск по фото"),
 		),
 		tgbotapi.NewKeyboardButtonRow(
+			tgbotapi.NewKeyboardButton("🔥 Популярные запросы"),
 			tgbotapi.NewKeyboardButton("💎 Подписка"),
-			tgbotapi.NewKeyboardButton("👤 Профиль"),
 		),
 		tgbotapi.NewKeyboardButtonRow(
+			tgbotapi.NewKeyboardButton("🎁 Промокод"),
+			tgbotapi.NewKeyboardButton("👥 Рефералы"),
+		),
+		tgbotapi.NewKeyboardButtonRow(
+			tgbotapi.NewKeyboardButton("👤 Профиль"),
 			tgbotapi.NewKeyboardButton("❓ Помощь"),
 		),
 	)
-}
-
-func SearchResultKeyboard(hasMore bool) tgbotapi.InlineKeyboardMarkup {
-	var rows [][]tgbotapi.InlineKeyboardButton
-
-	if hasMore {
-		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData("📄 Показать ещё", "show_more"),
-		))
-	}
-
-	rows = append(rows, tgbotapi.NewInlineKeyboardRow(
-		tgbotapi.NewInlineKeyboardButtonData("🔄 Сортировка по цене", "sort_price"),
-		tgbotapi.NewInlineKeyboardButtonData("⭐ По рейтингу", "sort_rating"),
-	))
-
-	return tgbotapi.NewInlineKeyboardMarkup(rows...)
+	keyboard.ResizeKeyboard = true
+	return keyboard
 }
 
 func SubscriptionKeyboard(paymentURL string) tgbotapi.InlineKeyboardMarkup {
 	return tgbotapi.NewInlineKeyboardMarkup(
 		tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonURL("💳 Оплатить 100 ₽", paymentURL),
+			tgbotapi.NewInlineKeyboardButtonURL("💳 Оплатить", paymentURL),
 		),
 		tgbotapi.NewInlineKeyboardRow(
 			tgbotapi.NewInlineKeyboardButtonData("🔄 Проверить оплату", "check_payment"),
@@ -48,18 +36,12 @@ func SubscriptionKeyboard(paymentURL string) tgbotapi.InlineKeyboardMarkup {
 	)
 }
 
-func BackKeyboard() tgbotapi.InlineKeyboardMarkup {
-	return tgbotapi.NewInlineKeyboardMarkup(
-		tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData("◀️ Назад", "back_to_menu"),
+func CancelKeyboard() tgbotapi.ReplyKeyboardMarkup {
+	keyboard := tgbotapi.NewReplyKeyboard(
+		tgbotapi.NewKeyboardButtonRow(
+			tgbotapi.NewKeyboardButton("❌ Отмена"),
 		),
 	)
-}
-
-func ProductKeyboard(productURL string) tgbotapi.InlineKeyboardMarkup {
-	return tgbotapi.NewInlineKeyboardMarkup(
-		tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonURL("🛒 Перейти к товару", productURL),
-		),
-	)
+	keyboard.ResizeKeyboard = true
+	return keyboard
 }

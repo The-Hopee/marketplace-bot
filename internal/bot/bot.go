@@ -7,55 +7,76 @@ import (
 	"log"
 	"net/http"
 
+	"marketplace-bot/internal/cache"
 	"marketplace-bot/internal/config"
 	"marketplace-bot/internal/database"
 	"marketplace-bot/internal/marketplace"
 	"marketplace-bot/internal/payment"
+	"marketplace-bot/internal/service"
 	"marketplace-bot/internal/subscription"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
 type Bot struct {
-	api        *tgbotapi.BotAPI
-	handler    *Handler
-	cfg        *config.Config
-	repo       *database.Repository
-	subService *subscription.Service
+	api         *tgbotapi.BotAPI
+	handler     *Handler
+	cfg         *config.Config
+	subService  *subscription.Service
+	tbankClient *payment.TBankClient
 }
 
-func New(cfg *config.Config, db *database.DB) (*Bot, error) {
+func New(cfg *config.Config, db *database.DB, redisCache *cache.RedisCache) (*Bot, error) {
 	api, err := tgbotapi.NewBotAPI(cfg.TelegramToken)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create bot: %w", err)
 	}
-
 	log.Printf("Authorized on account %s", api.Self.UserName)
 
 	repo := database.NewRepository(db)
-	tbankClient := payment.NewTBankClient(cfg.TBankTerminalKey, cfg.TBankSecretKey, cfg.TBankBaseURL)
+
+	// T-Bank
+	notificationURL := ""
+	if cfg.WebhookURL != "" {
+		notificationURL = cfg.WebhookURL + "/webhook/payment"
+	}
+	tbankClient := payment.NewTBankClient(
+		cfg.TBankTerminalKey,
+		cfg.TBankSecretKey,
+		cfg.TBankBaseURL,
+		notificationURL,
+	)
+
+	// Сервисы
 	subService := subscription.NewService(repo, tbankClient, cfg)
+	adSvc := service.NewAdService(repo)
+	broadcastSvc := service.NewBroadcastService(api, repo)
+	referralSvc := service.NewReferralService(repo, api.Self.UserName)
+
+	// Админ-хендлеры
+	adminHandlers := NewAdminHandlers(api, repo, broadcastSvc, adSvc, cfg.AdminTelegramID)
+
+	// Агрегатор
 	aggregator := marketplace.NewAggregator()
 
-	handler := NewHandler(api, repo, aggregator, subService, cfg)
+	// Основной хендлер — передаём новые зависимости
+	handler := NewHandler(api, repo, aggregator, subService, redisCache, cfg,
+		adminHandlers, referralSvc)
 
 	return &Bot{
-		api:        api,
-		handler:    handler,
-		cfg:        cfg,
-		repo:       repo,
-		subService: subService,
+		api:         api,
+		handler:     handler,
+		cfg:         cfg,
+		subService:  subService,
+		tbankClient: tbankClient,
 	}, nil
 }
 
 func (b *Bot) Start(ctx context.Context) error {
-	// Запускаем webhook сервер для платежей
 	go b.startPaymentWebhook()
 
-	// Запускаем polling для Telegram
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60
-
 	updates := b.api.GetUpdatesChan(u)
 
 	log.Println("Bot started")
@@ -79,7 +100,7 @@ func (b *Bot) startPaymentWebhook() {
 
 	log.Printf("Starting webhook server on :%s", b.cfg.ServerPort)
 	if err := http.ListenAndServe(":"+b.cfg.ServerPort, nil); err != nil {
-		log.Printf("Webhook server error: %v", err)
+		log.Fatalf("webhook server error: %v", err)
 	}
 }
 
@@ -91,14 +112,20 @@ func (b *Bot) handlePaymentWebhook(w http.ResponseWriter, r *http.Request) {
 
 	var notification payment.NotificationRequest
 	if err := json.NewDecoder(r.Body).Decode(&notification); err != nil {
-		log.Printf("Error decoding payment notification: %v", err)
+		log.Printf("webhook: bad json: %v", err)
 		http.Error(w, "Bad request", http.StatusBadRequest)
 		return
 	}
 
-	log.Printf("Payment notification received: OrderID=%s, Status=%s", notification.OrderId, notification.Status)
+	log.Printf("Payment notification: OrderID=%s Status=%s PaymentId=%d",
+		notification.OrderId, notification.Status, notification.PaymentId)
 
-	// Проверяем статус платежа
+	if !b.tbankClient.VerifyNotification(&notification) {
+		log.Printf("webhook: invalid token for order %s", notification.OrderId)
+		http.Error(w, "Invalid token", http.StatusForbidden)
+		return
+	}
+
 	if notification.Status == "CONFIRMED" {
 		ctx := context.Background()
 		telegramID, err := b.subService.ConfirmPayment(
@@ -109,8 +136,8 @@ func (b *Bot) handlePaymentWebhook(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			log.Printf("Error confirming payment: %v", err)
 		} else {
-			// Отправляем уведомление пользователю
-			msg := tgbotapi.NewMessage(telegramID, "🎉 Оплата прошла успешно!\n\n✅ Подписка активирована на 30 дней.\n\nТеперь вам доступен безлимитный поиск!")
+			msg := tgbotapi.NewMessage(telegramID,
+				"🎉 Оплата прошла! Подписка активирована на 30 дней.")
 			msg.ReplyMarkup = MainMenuKeyboard()
 			b.api.Send(msg)
 		}
