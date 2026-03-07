@@ -131,7 +131,7 @@ func (b *Bot) handlePaymentWebhook(w http.ResponseWriter, r *http.Request) {
 		telegramID, err := b.subService.ConfirmPayment(
 			ctx,
 			notification.OrderId,
-			fmt.Sprintf("%d", notification.PaymentId),
+			notification.PaymentId,
 		)
 		if err != nil {
 			log.Printf("Error confirming payment: %v", err)

@@ -63,7 +63,7 @@ type InitResponse struct {
 	Details     string `json:"Details"`
 	TerminalKey string `json:"TerminalKey"`
 	Status      string `json:"Status"`
-	PaymentId   int64  `json:"PaymentId"`
+	PaymentId   string `json:"PaymentId"`
 	OrderId     string `json:"OrderId"`
 	Amount      int64  `json:"Amount"`
 	PaymentURL  string `json:"PaymentURL"`
@@ -74,7 +74,7 @@ type NotificationRequest struct {
 	OrderId     string `json:"OrderId"`
 	Success     bool   `json:"Success"`
 	Status      string `json:"Status"`
-	PaymentId   int64  `json:"PaymentId"`
+	PaymentId   string `json:"PaymentId"`
 	ErrorCode   string `json:"ErrorCode"`
 	Amount      int64  `json:"Amount"`
 	CardId      int64  `json:"CardId,omitempty"`
@@ -184,7 +184,7 @@ func (c *TBankClient) VerifyNotification(n *NotificationRequest) bool {
 		"OrderId":     n.OrderId,
 		"Success":     boolToString(n.Success),
 		"Status":      n.Status,
-		"PaymentId":   fmt.Sprintf("%d", n.PaymentId),
+		"PaymentId":   n.PaymentId,
 		"ErrorCode":   n.ErrorCode,
 		"Amount":      fmt.Sprintf("%d", n.Amount),
 		"Password":    c.secretKey,
