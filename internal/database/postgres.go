@@ -231,6 +231,26 @@ func (db *DB) Migrate(ctx context.Context) error {
 		}
 	}
 
+	// =====================================================================
+	// ДЛЯ ЕЖЕДНЕВНЫХ ПОПЫТОК
+	// =====================================================================
+
+	_, err = db.Pool.Exec(ctx,
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_searches INT DEFAULT 0`,
+	)
+
+	if err != nil {
+		return fmt.Errorf("create daily search: %w", err)
+	}
+
+	_, err = db.Pool.Exec(ctx,
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_search_date DATE`,
+	)
+
+	if err != nil {
+		return fmt.Errorf("create last search date: %w", err)
+	}
+
 	log.Println("[DB] Migrations completed successfully!")
 	return nil
 }

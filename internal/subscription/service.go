@@ -6,6 +6,7 @@ import (
 	"marketplace-bot/internal/config"
 	"marketplace-bot/internal/database"
 	"marketplace-bot/internal/payment"
+	"time"
 )
 
 type Service struct {
@@ -99,11 +100,28 @@ func (s *Service) CanUserSearch(ctx context.Context, telegramID int64) (bool, in
 		return false, 0, err
 	}
 
+	// Подписка — безлимит
 	if user.HasActiveSubscription() {
-		return true, -1, nil // -1 означает безлимит
+		return true, -1, nil
 	}
 
-	return user.FreeSearchesLeft > 0, user.FreeSearchesLeft, nil
+	// Basic: 5 поисков в день
+	const dailyLimit = 5
+	today := time.Now().UTC().Truncate(24 * time.Hour)
+
+	if user.LastSearchDate == nil || user.LastSearchDate.Before(today) {
+		// Новый день — счётчик с нуля
+		user.DailySearches = 0
+		s.repo.ResetDailySearches(ctx, telegramID)
+	}
+
+	if user.DailySearches >= dailyLimit {
+		return false, 0, nil
+	}
+
+	// Осталось:
+	left := dailyLimit - user.DailySearches
+	return true, left, nil
 }
 
 func (s *Service) UseSearch(ctx context.Context, telegramID int64) error {
@@ -116,5 +134,6 @@ func (s *Service) UseSearch(ctx context.Context, telegramID int64) error {
 		return s.repo.IncrementSearchCount(ctx, telegramID)
 	}
 
-	return s.repo.DecrementFreeSearches(ctx, telegramID)
+	// Basic: увеличиваем дневной счётчик
+	return s.repo.IncrementDailySearch(ctx, telegramID)
 }

@@ -230,19 +230,22 @@ func (h *Handler) handleSearchQuery(ctx context.Context, message *tgbotapi.Messa
 		return
 	}
 
-	canSearch, freeLeft, err := h.subService.CanUserSearch(ctx, userID)
+	can, left, err := h.subService.CanUserSearch(ctx, userID)
 	if err != nil {
 		log.Printf("[Handler] Error: %v", err)
 		msg := tgbotapi.NewMessage(message.Chat.ID, "❌ Ошибка. Попробуйте позже.")
 		h.bot.Send(msg)
 		return
 	}
-
-	if !canSearch {
-		msg := tgbotapi.NewMessage(message.Chat.ID,
-			"❌ Бесплатные поиски закончились.\n\n💎 Нажмите \"💎 Подписка\" или введите промокод 🎁")
-		h.bot.Send(msg)
+	if !can {
+		h.bot.Send(tgbotapi.NewMessage(message.Chat.ID,
+			"❌ Лимит 5 бесплатных поисков на сегодня исчерпан.\n\nОформите подписку 💎 или подождите до завтра."))
 		return
+	}
+
+	if left > 0 && left <= 2 {
+		h.bot.Send(tgbotapi.NewMessage(message.Chat.ID,
+			fmt.Sprintf("🆓 Осталось бесплатных поисков на сегодня: %d", left)))
 	}
 
 	searchMsg := tgbotapi.NewMessage(message.Chat.ID, "🔍 Ищу товары...")
@@ -253,9 +256,9 @@ func (h *Handler) handleSearchQuery(ctx context.Context, message *tgbotapi.Messa
 	h.performSearch(ctx, message.Chat.ID, userID, query, sentMsg.MessageID)
 
 	// Показываем оставшиеся поиски
-	if freeLeft > 0 && freeLeft <= 2 {
+	if left > 0 && left <= 5 {
 		infoMsg := tgbotapi.NewMessage(message.Chat.ID,
-			fmt.Sprintf("⚠️ Осталось бесплатных поисков: %d", freeLeft-1))
+			fmt.Sprintf("⚠️ Осталось бесплатных поисков: %d", left-1))
 		h.bot.Send(infoMsg)
 	}
 	// ═══════ Проверяем реферальный бонус за 20 поисков ═══════

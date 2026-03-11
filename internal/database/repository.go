@@ -23,13 +23,14 @@ func (r *Repository) CreateUser(ctx context.Context, telegramID int64, username,
 			last_name = EXCLUDED.last_name,
 			updated_at = CURRENT_TIMESTAMP
 		RETURNING id, telegram_id, username, first_name, last_name, subscription_end, 
-				  is_active, search_count, free_searches_left, created_at, updated_at
+				  is_active, search_count, free_searches_left, daily_searches, last_search_date, created_at, updated_at
 	`
 
 	var user User
 	err := r.db.Pool.QueryRow(ctx, query, telegramID, username, firstName, lastName).Scan(
 		&user.ID, &user.TelegramID, &user.Username, &user.FirstName, &user.LastName,
 		&user.SubscriptionEnd, &user.IsActive, &user.SearchCount, &user.FreeSearchesLeft,
+		&user.DailySearches, &user.LastSearchDate,
 		&user.CreatedAt, &user.UpdatedAt,
 	)
 	if err != nil {
@@ -41,7 +42,7 @@ func (r *Repository) CreateUser(ctx context.Context, telegramID int64, username,
 func (r *Repository) GetUserByTelegramID(ctx context.Context, telegramID int64) (*User, error) {
 	query := `
 		SELECT id, telegram_id, username, first_name, last_name, subscription_end,
-			   is_active, search_count, free_searches_left, created_at, updated_at
+			   is_active, search_count, free_searches_left, daily_searches, last_search_date, created_at, updated_at
 		FROM users WHERE telegram_id = $1
 	`
 
@@ -49,6 +50,7 @@ func (r *Repository) GetUserByTelegramID(ctx context.Context, telegramID int64) 
 	err := r.db.Pool.QueryRow(ctx, query, telegramID).Scan(
 		&user.ID, &user.TelegramID, &user.Username, &user.FirstName, &user.LastName,
 		&user.SubscriptionEnd, &user.IsActive, &user.SearchCount, &user.FreeSearchesLeft,
+		&user.DailySearches, &user.LastSearchDate,
 		&user.CreatedAt, &user.UpdatedAt,
 	)
 	if err != nil {
@@ -69,6 +71,23 @@ func (r *Repository) ExtendSubscription(ctx context.Context, telegramID int64, d
 		WHERE telegram_id = $1
 	`
 	_, err := r.db.Pool.Exec(ctx, query, telegramID, days)
+	return err
+}
+
+func (r *Repository) ResetDailySearches(ctx context.Context, telegramID int64) error {
+	_, err := r.db.Pool.Exec(ctx, `
+		UPDATE users SET daily_searches=0, last_search_date = CURRENT_DATE, updated_at=CURRENT_TIMESTAMP
+		WHERE telegram_id=$1`, telegramID)
+	return err
+}
+
+func (r *Repository) IncrementDailySearch(ctx context.Context, telegramID int64) error {
+	_, err := r.db.Pool.Exec(ctx, `
+		UPDATE users SET daily_searches = daily_searches + 1,
+			search_count = search_count + 1,
+			last_search_date = CURRENT_DATE,
+			updated_at = CURRENT_TIMESTAMP
+		WHERE telegram_id=$1`, telegramID)
 	return err
 }
 
@@ -156,7 +175,7 @@ func (r *Repository) GetUserStats(ctx context.Context, telegramID int64) (totalS
 func (r *Repository) GetAllUsers(ctx context.Context) ([]User, error) {
 	query := `
 		SELECT id, telegram_id, username, first_name, last_name, subscription_end,
-			   is_active, search_count, free_searches_left, created_at, updated_at
+			   is_active, search_count, free_searches_left, daily_searches, last_search_date, created_at, updated_at
 		FROM users ORDER BY created_at DESC
 	`
 	rows, err := r.db.Pool.Query(ctx, query)
@@ -171,6 +190,7 @@ func (r *Repository) GetAllUsers(ctx context.Context) ([]User, error) {
 		err := rows.Scan(
 			&user.ID, &user.TelegramID, &user.Username, &user.FirstName, &user.LastName,
 			&user.SubscriptionEnd, &user.IsActive, &user.SearchCount, &user.FreeSearchesLeft,
+			&user.DailySearches, &user.LastSearchDate,
 			&user.CreatedAt, &user.UpdatedAt,
 		)
 		if err != nil {

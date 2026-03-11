@@ -15,6 +15,8 @@ type User struct {
 	SubscriptionEnd  *time.Time `json:"subscription_end"`
 	IsActive         bool       `json:"is_active"`
 	SearchCount      int        `json:"search_count"`
+	DailySearches    int        `json:"daily_searches"`
+	LastSearchDate   *time.Time `json:"last_search_date"`
 	FreeSearchesLeft int        `json:"free_searches_left"`
 	CreatedAt        time.Time  `json:"created_at"`
 	UpdatedAt        time.Time  `json:"updated_at"`
