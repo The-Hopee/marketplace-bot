@@ -27,7 +27,7 @@ type Config struct {
 func Load() (*Config, error) {
 	_ = godotenv.Load()
 
-	price, _ := strconv.ParseInt(getEnv("SUBSCRIPTION_PRICE", "2500"), 10, 64)
+	price, _ := strconv.ParseInt(getEnv("SUBSCRIPTION_PRICE", "7900"), 10, 64)
 	days, _ := strconv.Atoi(getEnv("SUBSCRIPTION_DAYS", "30"))
 	cacheTTL, _ := strconv.Atoi(getEnv("CACHE_TTL_MINUTES", "30"))
 	ID, _ := strconv.ParseInt(os.Getenv("ADMIN_TELEGRAM_ID"), 10, 64)
