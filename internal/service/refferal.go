@@ -82,10 +82,10 @@ func (s *ReferralService) ProcessNewReferral(ctx context.Context, referrerID, re
 	_ = s.repo.SetUserReferredBy(ctx, referredID, referrerID)
 
 	// +7 дней обоим (бонус за регистрацию)
-	if err := s.repo.ExtendSubscription(ctx, referrerID, ReferralBonusDays); err != nil {
+	if err := s.repo.ExtendSubscription(ctx, referrerID, ReferralBonusDays, "premium"); err != nil {
 		log.Printf("referral: extend referrer %d: %v", referrerID, err)
 	}
-	if err := s.repo.ExtendSubscription(ctx, referredID, ReferralBonusDays); err != nil {
+	if err := s.repo.ExtendSubscription(ctx, referredID, ReferralBonusDays, "premium"); err != nil {
 		log.Printf("referral: extend referred %d: %v", referredID, err)
 	}
 	_ = s.repo.MarkRegBonusGiven(ctx, referredID)
@@ -124,8 +124,8 @@ func (s *ReferralService) CheckSearchBonus(ctx context.Context, telegramID int64
 	}
 
 	// +7 дней обоим (бонус за 20 поисков)
-	_ = s.repo.ExtendSubscription(ctx, ref.ReferrerTelegramID, ReferralBonusDays)
-	_ = s.repo.ExtendSubscription(ctx, telegramID, ReferralBonusDays)
+	_ = s.repo.ExtendSubscription(ctx, ref.ReferrerTelegramID, ReferralBonusDays, "premium")
+	_ = s.repo.ExtendSubscription(ctx, telegramID, ReferralBonusDays, "premium")
 	_ = s.repo.MarkSearchBonusGiven(ctx, telegramID)
 
 	log.Printf("Referral SEARCH bonus: referred=%d referrer=%d, +%d days each",

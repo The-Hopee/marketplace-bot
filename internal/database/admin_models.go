@@ -1,3 +1,4 @@
+// internal/database/damin_models.go
 package database
 
 import "time"
@@ -48,6 +49,7 @@ type Promocode struct {
 	ID        int64
 	Code      string
 	FreeDays  int
+	Tier      string
 	MaxUses   *int
 	UsedCount int
 	IsActive  bool

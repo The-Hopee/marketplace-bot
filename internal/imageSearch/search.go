@@ -75,18 +75,34 @@ func (s *ImageSearcher) parseProducts(html string) []marketplace.Product {
 	// === WILDBERRIES ===
 	wbProducts := s.parseWildberries(html, seen)
 	products = append(products, wbProducts...)
-	log.Printf("[ImageSearch] WB products: %d", len(wbProducts))
 
 	// === OZON ===
 	ozonProducts := s.parseOzon(html, seen)
 	products = append(products, ozonProducts...)
-	log.Printf("[ImageSearch] OZON products: %d", len(ozonProducts))
 
-	// Ограничиваем количество
+	// === AVITO (НОВОЕ) ===
+	avitoPattern := regexp.MustCompile(`href="(https?://(?:www\.)?avito\.ru/[^"]+)"[^>]*aria-label="([^"]+)"`)
+	avitoMatches := avitoPattern.FindAllStringSubmatch(html, 10)
+	for _, match := range avitoMatches {
+		if len(match) >= 3 {
+			url := match[1]
+			title := match[2]
+			// Генерируем фейковый ID из конца URL
+			idParts := strings.Split(url, "_")
+			id := idParts[len(idParts)-1]
+
+			if !seen["avito_"+id] {
+				seen["avito_"+id] = true
+				products = append(products, marketplace.Product{
+					ID: id, Name: truncate(title, 50), URL: url, Marketplace: "Avito", Condition: "Б/У",
+				})
+			}
+		}
+	}
+
 	if len(products) > 20 {
 		products = products[:20]
 	}
-
 	return products
 }
 

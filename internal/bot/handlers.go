@@ -1,3 +1,4 @@
+// internal/bot/handlers.go
 package bot
 
 import (
@@ -33,6 +34,7 @@ type Handler struct {
 	// Новые зависимости
 	adminHandlers *AdminHandlers
 	referralSvc   *service.ReferralService
+	aiAgent       *analysis.AIAgent
 
 	userStates   map[int64]string
 	lastSearch   map[int64]string
@@ -48,6 +50,7 @@ func NewHandler(
 	cfg *config.Config,
 	adminHandlers *AdminHandlers,
 	referralSvc *service.ReferralService,
+	aiAgent *analysis.AIAgent,
 ) *Handler {
 	return &Handler{
 		bot:           bot,
@@ -60,6 +63,7 @@ func NewHandler(
 		cfg:           cfg,
 		adminHandlers: adminHandlers,
 		referralSvc:   referralSvc,
+		aiAgent:       aiAgent,
 		userStates:    make(map[int64]string),
 		lastSearch:    make(map[int64]string),
 		lastAnalysis:  make(map[int64]*analysis.AnalysisResult),
@@ -230,7 +234,7 @@ func (h *Handler) handleSearchQuery(ctx context.Context, message *tgbotapi.Messa
 		return
 	}
 
-	can, left, err := h.subService.CanUserSearch(ctx, userID)
+	can, left, err := h.subService.CanUserSearch(ctx, userID, subscription.SearchTypeWBText)
 	if err != nil {
 		log.Printf("[Handler] Error: %v", err)
 		msg := tgbotapi.NewMessage(message.Chat.ID, "❌ Ошибка. Попробуйте позже.")
@@ -251,7 +255,7 @@ func (h *Handler) handleSearchQuery(ctx context.Context, message *tgbotapi.Messa
 	searchMsg := tgbotapi.NewMessage(message.Chat.ID, "🔍 Ищу товары...")
 	sentMsg, _ := h.bot.Send(searchMsg)
 
-	h.subService.UseSearch(ctx, userID)
+	h.subService.UseSearch(ctx, userID, subscription.SearchTypeWBText)
 
 	h.performSearch(ctx, message.Chat.ID, userID, query, sentMsg.MessageID)
 
@@ -279,6 +283,13 @@ func (h *Handler) handleSearchQuery(ctx context.Context, message *tgbotapi.Messa
 }
 
 func (h *Handler) performSearch(ctx context.Context, chatID int64, userID int64, query string, msgIDToDelete int) {
+	// Получаем юзера, чтобы узнать уровень подписки
+	user, err := h.repo.GetUserByTelegramID(ctx, userID)
+	tier := "free"
+	if err == nil && user != nil && user.HasActiveSubscription() {
+		tier = user.SubscriptionTier
+	}
+
 	var results *marketplace.AggregatedResult
 	var fromCache bool
 
@@ -293,7 +304,8 @@ func (h *Handler) performSearch(ctx context.Context, chatID int64, userID int64,
 	}
 
 	if results == nil {
-		results = h.aggregator.Search(ctx, query, 10)
+		// ПЕРЕДАЕМ TIER В АГРЕГАТОР (запускает нужные маркетплейсы)
+		results = h.aggregator.Search(ctx, query, 10, tier)
 
 		if h.cache != nil && results.TotalCount > 0 {
 			h.cache.SetSearchResults(ctx, query, results)
@@ -310,11 +322,42 @@ func (h *Handler) performSearch(ctx context.Context, chatID int64, userID int64,
 
 	if results.TotalCount == 0 {
 		msg := tgbotapi.NewMessage(chatID, fmt.Sprintf("😔 По запросу \"%s\" ничего не найдено", query))
-		msg.ReplyMarkup = MainMenuKeyboard()
+		msg.ReplyMarkup = MainMenuKeyboard() // Убедись, что функция клавиатуры импортирована
 		h.bot.Send(msg)
 		return
 	}
 
+	// ==========================================
+	// 🚀 МАГИЯ PRO-ПОДПИСКИ (AI-АГЕНТ)
+	// ==========================================
+	if tier == "pro" {
+		aiWaitMsg := tgbotapi.NewMessage(chatID, "🤖 *AI-Агент* анализирует товары, сравнивает цены и отзывы. Подождите пару секунд...")
+		aiWaitMsg.ParseMode = "Markdown"
+		sentWait, _ := h.bot.Send(aiWaitMsg)
+
+		aiResponse, err := h.aiAgent.Analyze(ctx, results)
+
+		h.bot.Request(tgbotapi.NewDeleteMessage(chatID, sentWait.MessageID))
+
+		if err == nil && aiResponse != "" {
+			msg := tgbotapi.NewMessage(chatID, aiResponse)
+			msg.ParseMode = "Markdown" // GPT возвращает красивый Markdown
+			msg.DisableWebPagePreview = true
+			msg.ReplyMarkup = MainMenuKeyboard()
+			h.bot.Send(msg)
+
+			// Сохраняем в историю алгоритмический анализ для совместимости
+			h.lastAnalysis[userID] = h.analyzer.Analyze(results)
+			return
+		}
+
+		log.Printf("[Handler] AI error fallback: %v", err)
+		// Если ИИ отвалился по таймауту/ошибке, бот просто пойдет дальше и выдаст обычный анализ!
+	}
+
+	// ==========================================
+	// ОБЫЧНЫЙ ВЫВОД ДЛЯ FREE И PREMIUM
+	// ==========================================
 	analysisResult := h.analyzer.Analyze(results)
 	h.lastAnalysis[userID] = analysisResult
 
@@ -436,7 +479,7 @@ func (h *Handler) handleImageSearch(ctx context.Context, message *tgbotapi.Messa
 	userID := message.From.ID
 	delete(h.userStates, userID)
 
-	canSearch, _, err := h.subService.CanUserSearch(ctx, userID)
+	canSearch, _, err := h.subService.CanUserSearch(ctx, userID, subscription.SearchTypeImage)
 	if err != nil || !canSearch {
 		msg := tgbotapi.NewMessage(message.Chat.ID, "❌ У вас закончились бесплатные поиски. Оформите подписку.")
 		h.bot.Send(msg)
@@ -472,7 +515,7 @@ func (h *Handler) handleImageSearch(ctx context.Context, message *tgbotapi.Messa
 		return
 	}
 
-	h.subService.UseSearch(ctx, userID)
+	h.subService.UseSearch(ctx, userID, subscription.SearchTypeImage)
 
 	h.bot.Request(tgbotapi.NewDeleteMessage(message.Chat.ID, sentMsg.MessageID))
 
@@ -750,7 +793,7 @@ func (h *Handler) applyPromo(ctx context.Context, message *tgbotapi.Message) {
 	}
 
 	// Активируем
-	if err := h.repo.ExtendSubscription(ctx, message.From.ID, promo.FreeDays); err != nil {
+	if err := h.repo.ExtendSubscription(ctx, message.From.ID, promo.FreeDays, promo.Tier); err != nil {
 		log.Printf("ERROR extend sub promo %d: %v", message.From.ID, err)
 		h.bot.Send(tgbotapi.NewMessage(message.Chat.ID, "❌ Ошибка"))
 		return

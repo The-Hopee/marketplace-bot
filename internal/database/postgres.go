@@ -1,3 +1,4 @@
+// interanl/database/postgres.go
 package database
 
 import (
@@ -232,24 +233,26 @@ func (db *DB) Migrate(ctx context.Context) error {
 	}
 
 	// =====================================================================
-	// ДЛЯ ЕЖЕДНЕВНЫХ ПОПЫТОК
+	// НОВЫЕ КОЛОНКИ ДЛЯ РАЗДЕЛЬНЫХ ЛИМИТОВ И ПОДПИСОК
 	// =====================================================================
 
-	_, err = db.Pool.Exec(ctx,
-		`ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_searches INT DEFAULT 0`,
-	)
-
-	if err != nil {
-		return fmt.Errorf("create daily search: %w", err)
-	}
-
-	_, err = db.Pool.Exec(ctx,
+	queries := []string{
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_tier VARCHAR(20) DEFAULT 'free'`,
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_wb_text INT DEFAULT 0`,
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_ozon_text INT DEFAULT 0`,
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_image INT DEFAULT 0`,
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_search_date DATE`,
-	)
-
-	if err != nil {
-		return fmt.Errorf("create last search date: %w", err)
+		`ALTER TABLE promocodes ADD COLUMN IF NOT EXISTS tier VARCHAR(20) DEFAULT 'premium'`,
 	}
+
+	for _, q := range queries {
+		if _, err := db.Pool.Exec(ctx, q); err != nil {
+			return fmt.Errorf("failed to add column: %w", err)
+		}
+	}
+
+	// Чтобы старые данные не сломались, обновим премиумов
+	_, _ = db.Pool.Exec(ctx, `UPDATE users SET subscription_tier = 'premium' WHERE subscription_end > CURRENT_TIMESTAMP AND subscription_tier = 'free'`)
 
 	log.Println("[DB] Migrations completed successfully!")
 	return nil

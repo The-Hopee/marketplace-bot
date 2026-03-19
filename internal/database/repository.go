@@ -1,7 +1,9 @@
+// internal/database/repository.go
 package database
 
 import (
 	"context"
+	"fmt"
 )
 
 type Repository struct {
@@ -13,71 +15,24 @@ func NewRepository(db *DB) *Repository {
 }
 
 // User methods
-func (r *Repository) CreateUser(ctx context.Context, telegramID int64, username, firstName, lastName string) (*User, error) {
+
+func (r *Repository) ExtendSubscription(ctx context.Context, telegramID int64, days int, tier string) error {
 	query := `
-		INSERT INTO users (telegram_id, username, first_name, last_name)
-		VALUES ($1, $2, $3, $4)
-		ON CONFLICT (telegram_id) DO UPDATE SET
-			username = EXCLUDED.username,
-			first_name = EXCLUDED.first_name,
-			last_name = EXCLUDED.last_name,
-			updated_at = CURRENT_TIMESTAMP
-		RETURNING id, telegram_id, username, first_name, last_name, subscription_end, 
-				  is_active, search_count, free_searches_left, daily_searches, last_search_date, created_at, updated_at
-	`
-
-	var user User
-	err := r.db.Pool.QueryRow(ctx, query, telegramID, username, firstName, lastName).Scan(
-		&user.ID, &user.TelegramID, &user.Username, &user.FirstName, &user.LastName,
-		&user.SubscriptionEnd, &user.IsActive, &user.SearchCount, &user.FreeSearchesLeft,
-		&user.DailySearches, &user.LastSearchDate,
-		&user.CreatedAt, &user.UpdatedAt,
-	)
-	if err != nil {
-		return nil, err
-	}
-	return &user, nil
-}
-
-func (r *Repository) GetUserByTelegramID(ctx context.Context, telegramID int64) (*User, error) {
-	query := `
-		SELECT id, telegram_id, username, first_name, last_name, subscription_end,
-			   is_active, search_count, free_searches_left, daily_searches, last_search_date, created_at, updated_at
-		FROM users WHERE telegram_id = $1
-	`
-
-	var user User
-	err := r.db.Pool.QueryRow(ctx, query, telegramID).Scan(
-		&user.ID, &user.TelegramID, &user.Username, &user.FirstName, &user.LastName,
-		&user.SubscriptionEnd, &user.IsActive, &user.SearchCount, &user.FreeSearchesLeft,
-		&user.DailySearches, &user.LastSearchDate,
-		&user.CreatedAt, &user.UpdatedAt,
-	)
-	if err != nil {
-		return nil, err
-	}
-	return &user, nil
-}
-
-func (r *Repository) ExtendSubscription(ctx context.Context, telegramID int64, days int) error {
-	query := `
-		UPDATE users SET 
-			subscription_end = CASE 
-				WHEN subscription_end IS NULL OR subscription_end < CURRENT_TIMESTAMP 
-				THEN CURRENT_TIMESTAMP + INTERVAL '1 day' * $2
-				ELSE subscription_end + INTERVAL '1 day' * $2
-			END,
-			updated_at = CURRENT_TIMESTAMP
-		WHERE telegram_id = $1
-	`
-	_, err := r.db.Pool.Exec(ctx, query, telegramID, days)
-	return err
-}
-
-func (r *Repository) ResetDailySearches(ctx context.Context, telegramID int64) error {
-	_, err := r.db.Pool.Exec(ctx, `
-		UPDATE users SET daily_searches=0, last_search_date = CURRENT_DATE, updated_at=CURRENT_TIMESTAMP
-		WHERE telegram_id=$1`, telegramID)
+    UPDATE users SET 
+      subscription_end = CASE 
+        WHEN subscription_end IS NULL OR subscription_end < CURRENT_TIMESTAMP 
+        THEN CURRENT_TIMESTAMP + INTERVAL '1 day' * $2
+        ELSE subscription_end + INTERVAL '1 day' * $2
+      END,
+      subscription_tier = CASE
+        WHEN $3 = 'pro' THEN 'pro' -- Если дают PRO, всегда ставим PRO
+        WHEN subscription_tier = 'pro' THEN 'pro' -- Если дают Premium, но уже был PRO - оставляем PRO
+        ELSE $3
+      END,
+      updated_at = CURRENT_TIMESTAMP
+    WHERE telegram_id = $1
+  `
+	_, err := r.db.Pool.Exec(ctx, query, telegramID, days, tier)
 	return err
 }
 
@@ -88,18 +43,6 @@ func (r *Repository) IncrementDailySearch(ctx context.Context, telegramID int64)
 			last_search_date = CURRENT_DATE,
 			updated_at = CURRENT_TIMESTAMP
 		WHERE telegram_id=$1`, telegramID)
-	return err
-}
-
-func (r *Repository) DecrementFreeSearches(ctx context.Context, telegramID int64) error {
-	query := `
-		UPDATE users SET 
-			free_searches_left = free_searches_left - 1,
-			search_count = search_count + 1,
-			updated_at = CURRENT_TIMESTAMP
-		WHERE telegram_id = $1 AND free_searches_left > 0
-	`
-	_, err := r.db.Pool.Exec(ctx, query, telegramID)
 	return err
 }
 
@@ -172,34 +115,6 @@ func (r *Repository) GetUserStats(ctx context.Context, telegramID int64) (totalS
 }
 
 // Admin methods
-func (r *Repository) GetAllUsers(ctx context.Context) ([]User, error) {
-	query := `
-		SELECT id, telegram_id, username, first_name, last_name, subscription_end,
-			   is_active, search_count, free_searches_left, daily_searches, last_search_date, created_at, updated_at
-		FROM users ORDER BY created_at DESC
-	`
-	rows, err := r.db.Pool.Query(ctx, query)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var users []User
-	for rows.Next() {
-		var user User
-		err := rows.Scan(
-			&user.ID, &user.TelegramID, &user.Username, &user.FirstName, &user.LastName,
-			&user.SubscriptionEnd, &user.IsActive, &user.SearchCount, &user.FreeSearchesLeft,
-			&user.DailySearches, &user.LastSearchDate,
-			&user.CreatedAt, &user.UpdatedAt,
-		)
-		if err != nil {
-			return nil, err
-		}
-		users = append(users, user)
-	}
-	return users, nil
-}
 
 func (r *Repository) GetActiveSubscribersCount(ctx context.Context) (int, error) {
 	query := `SELECT COUNT(*) FROM users WHERE subscription_end > CURRENT_TIMESTAMP`
@@ -213,4 +128,123 @@ func (r *Repository) GetTotalRevenue(ctx context.Context) (int64, error) {
 	var total int64
 	err := r.db.Pool.QueryRow(ctx, query).Scan(&total)
 	return total, err
+}
+
+// Сброс ВСЕХ дневных счетчиков (вызывается при первом запросе в новый день)
+func (r *Repository) ResetDailySearches(ctx context.Context, telegramID int64) error {
+	_, err := r.db.Pool.Exec(ctx, `
+    UPDATE users SET 
+      daily_wb_text = 0,
+      daily_ozon_text = 0,
+      daily_image = 0,
+      last_search_date = CURRENT_DATE, 
+      updated_at = CURRENT_TIMESTAMP
+    WHERE telegram_id=$1`, telegramID)
+	return err
+}
+
+// Инкремент конкретного типа поиска ("wb_text", "ozon_text" или "image")
+func (r *Repository) IncrementSearchLimit(ctx context.Context, telegramID int64, searchType string) error {
+	column := ""
+	switch searchType {
+	case "wb_text":
+		column = "daily_wb_text"
+	case "ozon_text":
+		column = "daily_ozon_text"
+	case "image":
+		column = "daily_image"
+	default:
+		return nil
+	}
+
+	query := fmt.Sprintf(`
+    UPDATE users SET 
+      %s = %s + 1,
+      search_count = search_count + 1,
+      last_search_date = CURRENT_DATE,
+      updated_at = CURRENT_TIMESTAMP
+    WHERE telegram_id=$1`, column, column)
+
+	_, err := r.db.Pool.Exec(ctx, query, telegramID)
+	return err
+}
+
+// internal/database/repository.go
+
+func (r *Repository) CreateUser(ctx context.Context, telegramID int64, username, firstName, lastName string) (*User, error) {
+	query := `
+		INSERT INTO users (telegram_id, username, first_name, last_name)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (telegram_id) DO UPDATE SET
+			username = EXCLUDED.username,
+			first_name = EXCLUDED.first_name,
+			last_name = EXCLUDED.last_name,
+			updated_at = CURRENT_TIMESTAMP
+		RETURNING id, telegram_id, username, first_name, last_name, 
+		          subscription_end, subscription_tier, is_active, search_count, 
+		          daily_wb_text, daily_ozon_text, daily_image, last_search_date, created_at, updated_at
+	`
+
+	var user User
+	err := r.db.Pool.QueryRow(ctx, query, telegramID, username, firstName, lastName).Scan(
+		&user.ID, &user.TelegramID, &user.Username, &user.FirstName, &user.LastName,
+		&user.SubscriptionEnd, &user.SubscriptionTier, &user.IsActive, &user.SearchCount,
+		&user.DailyWbText, &user.DailyOzonText, &user.DailyImage,
+		&user.LastSearchDate, &user.CreatedAt, &user.UpdatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
+func (r *Repository) GetUserByTelegramID(ctx context.Context, telegramID int64) (*User, error) {
+	query := `
+		SELECT id, telegram_id, username, first_name, last_name, 
+		       subscription_end, subscription_tier, is_active, search_count, 
+		       daily_wb_text, daily_ozon_text, daily_image, last_search_date, created_at, updated_at
+		FROM users WHERE telegram_id = $1
+	`
+
+	var user User
+	err := r.db.Pool.QueryRow(ctx, query, telegramID).Scan(
+		&user.ID, &user.TelegramID, &user.Username, &user.FirstName, &user.LastName,
+		&user.SubscriptionEnd, &user.SubscriptionTier, &user.IsActive, &user.SearchCount,
+		&user.DailyWbText, &user.DailyOzonText, &user.DailyImage,
+		&user.LastSearchDate, &user.CreatedAt, &user.UpdatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
+func (r *Repository) GetAllUsers(ctx context.Context) ([]User, error) {
+	query := `
+		SELECT id, telegram_id, username, first_name, last_name, 
+		       subscription_end, subscription_tier, is_active, search_count, 
+		       daily_wb_text, daily_ozon_text, daily_image, last_search_date, created_at, updated_at
+		FROM users ORDER BY created_at DESC
+	`
+	rows, err := r.db.Pool.Query(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var users []User
+	for rows.Next() {
+		var user User
+		err := rows.Scan(
+			&user.ID, &user.TelegramID, &user.Username, &user.FirstName, &user.LastName,
+			&user.SubscriptionEnd, &user.SubscriptionTier, &user.IsActive, &user.SearchCount,
+			&user.DailyWbText, &user.DailyOzonText, &user.DailyImage,
+			&user.LastSearchDate, &user.CreatedAt, &user.UpdatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		users = append(users, user)
+	}
+	return users, nil
 }

@@ -9,6 +9,13 @@ import (
 	"time"
 )
 
+const (
+	SearchTypeWBText   = "wb_text"
+	SearchTypeOzonText = "ozon_text"
+	SearchTypeImage    = "image"
+	DailyFreeLimit     = 5
+)
+
 type Service struct {
 	repo  *database.Repository
 	tbank *payment.TBankClient
@@ -78,8 +85,8 @@ func (s *Service) ConfirmPayment(ctx context.Context, orderID, paymentID string)
 		return 0, err
 	}
 
-	// Продлеваем подписку
-	if err := s.repo.ExtendSubscription(ctx, paymentRecord.TelegramID, s.cfg.SubscriptionDays); err != nil {
+	// Продлеваем подписку (добавили "premium")
+	if err := s.repo.ExtendSubscription(ctx, paymentRecord.TelegramID, s.cfg.SubscriptionDays, "premium"); err != nil {
 		return 0, err
 	}
 
@@ -94,46 +101,47 @@ func (s *Service) CheckSubscription(ctx context.Context, telegramID int64) (bool
 	return user.HasActiveSubscription(), nil
 }
 
-func (s *Service) CanUserSearch(ctx context.Context, telegramID int64) (bool, int, error) {
-	user, err := s.repo.GetUserByTelegramID(ctx, telegramID)
+func (s *Service) CanUserSearch(ctx context.Context, userID int64, searchType string) (bool, int, error) {
+	user, err := s.repo.GetUserByTelegramID(ctx, userID)
 	if err != nil {
 		return false, 0, err
 	}
 
-	// Подписка — безлимит
+	// Если наступил новый день (или дата пустая) — сбрасываем счетчики
+	if user.LastSearchDate == nil || user.LastSearchDate.Before(time.Now().Truncate(24*time.Hour)) {
+		_ = s.repo.ResetDailySearches(ctx, userID)
+		user.DailyWbText = 0
+		user.DailyOzonText = 0
+		user.DailyImage = 0
+		now := time.Now()
+		user.LastSearchDate = &now
+	}
+
+	// Премиум и ПРО имеют безлимит
 	if user.HasActiveSubscription() {
-		return true, -1, nil
+		return true, 999, nil
 	}
 
-	// Basic: 5 поисков в день
-	const dailyLimit = 5
-	today := time.Now().UTC().Truncate(24 * time.Hour)
-
-	if user.LastSearchDate == nil || user.LastSearchDate.Before(today) {
-		// Новый день — счётчик с нуля
-		user.DailySearches = 0
-		s.repo.ResetDailySearches(ctx, telegramID)
+	// Проверяем конкретный лимит в зависимости от типа поиска
+	used := 0
+	switch searchType {
+	case SearchTypeWBText:
+		used = user.DailyWbText
+	case SearchTypeOzonText:
+		used = user.DailyOzonText
+	case SearchTypeImage:
+		used = user.DailyImage
 	}
 
-	if user.DailySearches >= dailyLimit {
-		return false, 0, nil
+	left := DailyFreeLimit - used
+	if left > 0 {
+		return true, left, nil
 	}
 
-	// Осталось:
-	left := dailyLimit - user.DailySearches
-	return true, left, nil
+	return false, 0, nil
 }
 
-func (s *Service) UseSearch(ctx context.Context, telegramID int64) error {
-	user, err := s.repo.GetUserByTelegramID(ctx, telegramID)
-	if err != nil {
-		return err
-	}
-
-	if user.HasActiveSubscription() {
-		return s.repo.IncrementSearchCount(ctx, telegramID)
-	}
-
-	// Basic: увеличиваем дневной счётчик
-	return s.repo.IncrementDailySearch(ctx, telegramID)
+func (s *Service) UseSearch(ctx context.Context, userID int64, searchType string) error {
+	// Инкрементируем нужный счетчик
+	return s.repo.IncrementSearchLimit(ctx, userID, searchType)
 }

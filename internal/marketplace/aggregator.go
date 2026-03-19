@@ -9,14 +9,16 @@ import (
 )
 
 type Aggregator struct {
-	marketplaces []Marketplace
+	wb    Marketplace
+	ozon  Marketplace
+	avito Marketplace
 }
 
-func NewAggregator() *Aggregator {
+func NewAggregator(scraperAPIKey string) *Aggregator {
 	return &Aggregator{
-		marketplaces: []Marketplace{
-			NewWildberries(),
-		},
+		wb:    NewWildberries(),
+		ozon:  NewOzon(scraperAPIKey),
+		avito: NewAvito(scraperAPIKey),
 	}
 }
 
@@ -27,17 +29,29 @@ type AggregatedResult struct {
 	Errors     map[string]string    `json:"errors,omitempty"`
 }
 
-func (a *Aggregator) Search(ctx context.Context, query string, limitPerMarketplace int) *AggregatedResult {
+// Теперь мы передаем subscriptionTier, чтобы знать, какие парсеры включать
+func (a *Aggregator) Search(ctx context.Context, query string, limitPerMarketplace int, subscriptionTier string) *AggregatedResult {
 	result := &AggregatedResult{
 		Query:   query,
 		Results: make(map[string][]Product),
 		Errors:  make(map[string]string),
 	}
 
+	// Определяем, какие маркетплейсы опрашивать
+	var activeMarketplaces []Marketplace
+
+	// WB и Ozon доступны всем
+	activeMarketplaces = append(activeMarketplaces, a.wb, a.ozon)
+
+	// Avito доступно только Premium и Pro (или админам, у которых HasActiveSubscription() = true)
+	if subscriptionTier == "premium" || subscriptionTier == "pro" {
+		activeMarketplaces = append(activeMarketplaces, a.avito)
+	}
+
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 
-	for _, mp := range a.marketplaces {
+	for _, mp := range activeMarketplaces {
 		wg.Add(1)
 		go func(m Marketplace) {
 			defer wg.Done()
@@ -56,9 +70,11 @@ func (a *Aggregator) Search(ctx context.Context, query string, limitPerMarketpla
 				return
 			}
 
-			log.Printf("[%s] Found %d products", mpName, len(searchResult.Products))
-			result.Results[mpName] = searchResult.Products
-			result.TotalCount += len(searchResult.Products)
+			if searchResult != nil && len(searchResult.Products) > 0 {
+				log.Printf("[%s] Found %d products", mpName, len(searchResult.Products))
+				result.Results[mpName] = searchResult.Products
+				result.TotalCount += len(searchResult.Products)
+			}
 		}(mp)
 	}
 
@@ -66,15 +82,16 @@ func (a *Aggregator) Search(ctx context.Context, query string, limitPerMarketpla
 	return result
 }
 
-func (a *Aggregator) SearchCombined(ctx context.Context, query string, limit int) []Product {
-	result := a.Search(ctx, query, limit)
+// Эта функция (если ты её используешь) тоже получает subscriptionTier
+func (a *Aggregator) SearchCombined(ctx context.Context, query string, limit int, subscriptionTier string) []Product {
+	result := a.Search(ctx, query, limit, subscriptionTier)
 
 	var allProducts []Product
 	for _, products := range result.Results {
 		allProducts = append(allProducts, products...)
 	}
 
-	// Сортируем по цене
+	// Сортируем по цене (от меньшей к большей)
 	sort.Slice(allProducts, func(i, j int) bool {
 		return allProducts[i].Price < allProducts[j].Price
 	})

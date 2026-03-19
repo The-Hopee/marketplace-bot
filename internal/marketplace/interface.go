@@ -1,3 +1,4 @@
+// internal/marketplace/interface.go
 package marketplace
 
 import "context"
@@ -15,6 +16,9 @@ type Product struct {
 	Seller      string  `json:"seller"`
 	Marketplace string  `json:"marketplace"`
 	InStock     bool    `json:"in_stock"`
+
+	Condition    string `json:"condition,omitempty"`     // "Новое" / "Б/У" (важно для Avito)
+	DeliveryTime string `json:"delivery_time,omitempty"` // "Завтра", "12 мая"
 }
 
 type SearchResult struct {

@@ -161,7 +161,10 @@ func (a *Analyzer) scoreProducts(products []marketplace.Product, stats PriceStat
 		}
 		// Скор по количеству отзывов (0-10 баллов)
 		if p.ReviewCount > 0 {
-			reviewScore := min(float64(p.ReviewCount)/1000*10, 10)
+			reviewScore := float64(p.ReviewCount) / 100.0 // 1000 отзывов = 10 баллов
+			if reviewScore > 10.0 {
+				reviewScore = 10.0
+			}
 			sp.Score += reviewScore
 		}
 

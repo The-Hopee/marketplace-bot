@@ -1,3 +1,4 @@
+// internal/database/admin_repository.go
 package database
 
 import (
@@ -214,11 +215,24 @@ func (r *Repository) GetTotalUsersCount(ctx context.Context) (int, error) {
 	return count, err
 }
 
+func (r *Repository) GetSubscribersStats(ctx context.Context) (int, int, error) {
+	var premium, pro int
+	// Считаем активные подписки с разделением по типу
+	err := r.db.Pool.QueryRow(ctx, `
+		SELECT 
+			COUNT(*) FILTER (WHERE subscription_tier = 'premium'),
+			COUNT(*) FILTER (WHERE subscription_tier = 'pro')
+		FROM users 
+		WHERE subscription_end > CURRENT_TIMESTAMP
+	`).Scan(&premium, &pro)
+	return premium, pro, err
+}
+
 // ==================== Промокоды ====================
 
 func (r *Repository) GetAllPromocodes(ctx context.Context) ([]Promocode, error) {
 	rows, err := r.db.Pool.Query(ctx,
-		`SELECT id, code, free_days, max_uses, used_count, is_active, created_at
+		`SELECT id, code, free_days, tier, max_uses, used_count, is_active, created_at
      FROM promocodes ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
@@ -228,7 +242,7 @@ func (r *Repository) GetAllPromocodes(ctx context.Context) ([]Promocode, error) 
 	var list []Promocode
 	for rows.Next() {
 		var p Promocode
-		if err := rows.Scan(&p.ID, &p.Code, &p.FreeDays, &p.MaxUses,
+		if err := rows.Scan(&p.ID, &p.Code, &p.FreeDays, &p.Tier, &p.MaxUses,
 			&p.UsedCount, &p.IsActive, &p.CreatedAt); err != nil {
 			return nil, err
 		}
@@ -240,22 +254,23 @@ func (r *Repository) GetAllPromocodes(ctx context.Context) ([]Promocode, error) 
 func (r *Repository) GetPromocodeByCode(ctx context.Context, code string) (*Promocode, error) {
 	var p Promocode
 	err := r.db.Pool.QueryRow(ctx,
-		`SELECT id, code, free_days, max_uses, used_count, is_active, created_at
+		`SELECT id, code, free_days, tier, max_uses, used_count, is_active, created_at
      FROM promocodes WHERE code = $1`, code,
-	).Scan(&p.ID, &p.Code, &p.FreeDays, &p.MaxUses, &p.UsedCount, &p.IsActive, &p.CreatedAt)
+	).Scan(&p.ID, &p.Code, &p.FreeDays, &p.Tier, &p.MaxUses, &p.UsedCount, &p.IsActive, &p.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
 	return &p, nil
 }
-func (r *Repository) CreatePromocode(ctx context.Context, code string, freeDays, maxUses int) error {
+
+func (r *Repository) CreatePromocode(ctx context.Context, code string, freeDays int, tier string, maxUses int) error {
 	var maxUsesPtr *int
 	if maxUses > 0 {
 		maxUsesPtr = &maxUses
 	}
 	_, err := r.db.Pool.Exec(ctx,
-		`INSERT INTO promocodes (code, free_days, max_uses) VALUES ($1, $2, $3)`,
-		code, freeDays, maxUsesPtr)
+		`INSERT INTO promocodes (code, free_days, tier, max_uses) VALUES ($1, $2, $3, $4)`,
+		code, freeDays, tier, maxUsesPtr)
 	return err
 }
 

@@ -1,3 +1,4 @@
+// internal/bot/admin_handlers.go
 package bot
 
 import (
@@ -140,19 +141,88 @@ func (h *AdminHandlers) showMenu(chatID int64) {
 }
 
 // ==================== Статистика ====================
-
 func (h *AdminHandlers) showStats(ctx context.Context, chatID int64) {
 	total, _ := h.repo.GetTotalUsersCount(ctx)
-	subs, _ := h.repo.GetActiveSubscribersCount(ctx)
+	premiumCount, proCount, _ := h.repo.GetSubscribersStats(ctx) // НОВОЕ
 	revenue, _ := h.repo.GetTotalRevenue(ctx)
 
 	text := fmt.Sprintf(`📊 *Статистика*
 
 👥 Всего пользователей: *%d*
-💎 Активных подписок: *%d*
-💰 Выручка: *%.2f ₽*`, total, subs, float64(revenue)/100)
+💎 Premium подписчиков: *%d*
+👑 PRO подписчиков: *%d*
+💰 Выручка: *%.2f ₽*`, total, premiumCount, proCount, float64(revenue)/100)
 
 	m := tgbotapi.NewMessage(chatID, text)
+	m.ParseMode = "Markdown"
+	h.bot.Send(m)
+}
+
+// ==================== Промокоды ====================
+func (h *AdminHandlers) showPromos(ctx context.Context, chatID int64) {
+	list, _ := h.repo.GetAllPromocodes(ctx)
+	if len(list) == 0 {
+		h.bot.Send(tgbotapi.NewMessage(chatID, "Нет промокодов"))
+		return
+	}
+	var sb strings.Builder
+	sb.WriteString("🎟 *Промокоды:*\n\n")
+	for _, p := range list {
+		st := "✅"
+		if !p.IsActive {
+			st = "❌"
+		}
+		// Добавили отображение уровня подписки (premium/pro)
+		sb.WriteString(fmt.Sprintf("%s %s [%s] — %d дн.", st, p.Code, strings.ToUpper(p.Tier), p.FreeDays))
+		sb.WriteString(fmt.Sprintf(" (исп: %d", p.UsedCount))
+		if p.MaxUses != nil {
+			sb.WriteString(fmt.Sprintf("/%d", *p.MaxUses))
+		}
+		sb.WriteString(")\n")
+	}
+
+	m := tgbotapi.NewMessage(chatID, sb.String())
+	m.ParseMode = "Markdown"
+	h.bot.Send(m)
+}
+
+func (h *AdminHandlers) addPromo(ctx context.Context, msg *tgbotapi.Message) {
+	parts := strings.Fields(msg.Text)
+	// Теперь ждем 4 аргумента: /addpromo КОД ДНИ TIER [ЛИМИТ]
+	if len(parts) < 4 {
+		h.bot.Send(tgbotapi.NewMessage(msg.Chat.ID,
+			"Формат: /addpromo CODE ДНИ УРОВЕНЬ(premium/pro) [ЛИМИТ]\nПример: /addpromo VIP30 30 pro 50"))
+		return
+	}
+
+	code := strings.ToUpper(parts[1])
+	days, err := strconv.Atoi(parts[2])
+	tier := strings.ToLower(parts[3])
+
+	if err != nil || days < 1 {
+		h.bot.Send(tgbotapi.NewMessage(msg.Chat.ID, "❌ Дни должны быть > 0"))
+		return
+	}
+	if tier != "premium" && tier != "pro" {
+		h.bot.Send(tgbotapi.NewMessage(msg.Chat.ID, "❌ Уровень должен быть 'premium' или 'pro'"))
+		return
+	}
+
+	maxUses := 0
+	if len(parts) >= 5 {
+		maxUses, _ = strconv.Atoi(parts[4])
+	}
+
+	if err := h.repo.CreatePromocode(ctx, code, days, tier, maxUses); err != nil {
+		h.bot.Send(tgbotapi.NewMessage(msg.Chat.ID, "❌ "+err.Error()))
+		return
+	}
+
+	text := fmt.Sprintf("✅ Промокод создан\n\nКод: `%s`\nУровень: %s\nДней подписки: %d", code, strings.ToUpper(tier), days)
+	if maxUses > 0 {
+		text += fmt.Sprintf("\nЛимит: %d", maxUses)
+	}
+	m := tgbotapi.NewMessage(msg.Chat.ID, text)
 	m.ParseMode = "Markdown"
 	h.bot.Send(m)
 }
@@ -281,70 +351,6 @@ func (h *AdminHandlers) resumeBroadcast(ctx context.Context, chatID int64) {
 		return
 	}
 	h.bot.Send(tgbotapi.NewMessage(chatID, "▶️ Рассылка продолжена"))
-}
-
-// ==================== Промокоды ====================
-
-func (h *AdminHandlers) showPromos(ctx context.Context, chatID int64) {
-	list, _ := h.repo.GetAllPromocodes(ctx)
-	if len(list) == 0 {
-		h.bot.Send(tgbotapi.NewMessage(chatID, "Нет промокодов"))
-		return
-	}
-	var sb strings.Builder
-	sb.WriteString("🎟 *Промокоды:*\n\n")
-	for _, p := range list {
-		st := "✅"
-		if !p.IsActive {
-			st = "❌"
-		}
-		sb.WriteString(fmt.Sprintf("%s %s — %d дн.", st, p.Code, p.FreeDays))
-		sb.WriteString(fmt.Sprintf(" (исп: %d", p.UsedCount))
-		if p.MaxUses != nil {
-			sb.WriteString(fmt.Sprintf("/%d", *p.MaxUses))
-		}
-		sb.WriteString(")\n")
-	}
-
-	m := tgbotapi.NewMessage(chatID, sb.String())
-	m.ParseMode = "Markdown"
-	h.bot.Send(m)
-}
-
-// /addpromo CODE DAYS [LIMIT]
-// Пример: /addpromo VIP30 30 50
-func (h *AdminHandlers) addPromo(ctx context.Context, msg *tgbotapi.Message) {
-	parts := strings.Fields(msg.Text)
-	if len(parts) < 3 {
-		h.bot.Send(tgbotapi.NewMessage(msg.Chat.ID,
-			"Формат: /addpromo CODE ДНИ [ЛИМИТ]\nПример: /addpromo VIP30 30 50"))
-		return
-	}
-
-	code := strings.ToUpper(parts[1])
-	days, err := strconv.Atoi(parts[2])
-	if err != nil || days < 1 {
-		h.bot.Send(tgbotapi.NewMessage(msg.Chat.ID, "❌ Дни должны быть > 0"))
-		return
-	}
-
-	maxUses := 0
-	if len(parts) >= 4 {
-		maxUses, _ = strconv.Atoi(parts[3])
-	}
-
-	if err := h.repo.CreatePromocode(ctx, code, days, maxUses); err != nil {
-		h.bot.Send(tgbotapi.NewMessage(msg.Chat.ID, "❌ "+err.Error()))
-		return
-	}
-
-	text := fmt.Sprintf("✅ Промокод создан\n\nКод: `%s`\nДней подписки: %d", code, days)
-	if maxUses > 0 {
-		text += fmt.Sprintf("\nЛимит: %d", maxUses)
-	}
-	m := tgbotapi.NewMessage(msg.Chat.ID, text)
-	m.ParseMode = "Markdown"
-	h.bot.Send(m)
 }
 
 func (h *AdminHandlers) deletePromo(ctx context.Context, msg *tgbotapi.Message) {

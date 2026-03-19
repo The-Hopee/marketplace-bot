@@ -6,6 +6,12 @@ import (
 	"time"
 )
 
+const (
+	TierFree    = "free"
+	TierPremium = "premium"
+	TierPro     = "pro"
+)
+
 type User struct {
 	ID               int64      `json:"id"`
 	TelegramID       int64      `json:"telegram_id"`
@@ -13,13 +19,20 @@ type User struct {
 	FirstName        string     `json:"first_name"`
 	LastName         string     `json:"last_name"`
 	SubscriptionEnd  *time.Time `json:"subscription_end"`
+	SubscriptionTier string     `json:"subscription_tier"`
 	IsActive         bool       `json:"is_active"`
 	SearchCount      int        `json:"search_count"`
 	DailySearches    int        `json:"daily_searches"`
-	LastSearchDate   *time.Time `json:"last_search_date"`
 	FreeSearchesLeft int        `json:"free_searches_left"`
-	CreatedAt        time.Time  `json:"created_at"`
-	UpdatedAt        time.Time  `json:"updated_at"`
+
+	// Новые раздельные лимиты (использовано за день)
+	DailyWbText    int        `json:"daily_wb_text"`
+	DailyOzonText  int        `json:"daily_ozon_text"`
+	DailyImage     int        `json:"daily_image"`
+	LastSearchDate *time.Time `json:"last_search_date"`
+
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type Payment struct {
@@ -52,13 +65,33 @@ func (u *User) HasActiveSubscription() bool {
 	if u.TelegramID == getOwnerID() {
 		return true
 	}
-
 	if u.SubscriptionEnd == nil {
 		return false
 	}
-	return u.SubscriptionEnd.After(time.Now())
+	return u.SubscriptionEnd.After(time.Now()) && (u.SubscriptionTier == TierPremium || u.SubscriptionTier == TierPro)
 }
 
-func (u *User) CanSearch() bool {
-	return u.HasActiveSubscription() || u.FreeSearchesLeft > 0
+func (u *User) IsPro() bool {
+	if u.TelegramID == getOwnerID() {
+		return true
+	}
+	return u.HasActiveSubscription() && u.SubscriptionTier == TierPro
+}
+
+// НОВАЯ ФУНКЦИЯ: возвращает реальный уровень подписки
+func (u *User) GetTier() string {
+	// Админ всегда PRO
+	if u.TelegramID == getOwnerID() {
+		return TierPro
+	}
+
+	// Проверяем активную подписку
+	if u.SubscriptionEnd != nil && u.SubscriptionEnd.After(time.Now()) {
+		if u.SubscriptionTier != "" {
+			return u.SubscriptionTier
+		}
+		return TierPremium // Для старых записей без tier
+	}
+
+	return TierFree
 }

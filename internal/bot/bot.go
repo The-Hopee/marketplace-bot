@@ -1,3 +1,4 @@
+// internal/bot/bot.go
 package bot
 
 import (
@@ -7,6 +8,7 @@ import (
 	"log"
 	"net/http"
 
+	"marketplace-bot/internal/analysis"
 	"marketplace-bot/internal/cache"
 	"marketplace-bot/internal/config"
 	"marketplace-bot/internal/database"
@@ -56,12 +58,15 @@ func New(cfg *config.Config, db *database.DB, redisCache *cache.RedisCache) (*Bo
 	// Админ-хендлеры
 	adminHandlers := NewAdminHandlers(api, repo, broadcastSvc, adSvc, cfg.AdminTelegramID)
 
-	// Агрегатор
-	aggregator := marketplace.NewAggregator()
+	// Агрегатор (передаем ключ ScraperAPI)
+	aggregator := marketplace.NewAggregator(cfg.ScraperAPIKey)
 
-	// Основной хендлер — передаём новые зависимости
+	// Инициализируем AI-Агента
+	aiAgent := analysis.NewAIAgent(cfg.OpenAIKey, cfg.OpenAIBaseURL)
+
+	// Основной хендлер (добавили aiAgent)
 	handler := NewHandler(api, repo, aggregator, subService, redisCache, cfg,
-		adminHandlers, referralSvc)
+		adminHandlers, referralSvc, aiAgent)
 
 	return &Bot{
 		api:         api,
