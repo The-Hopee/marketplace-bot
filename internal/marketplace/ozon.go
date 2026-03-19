@@ -29,7 +29,7 @@ func (o *OzonMarketplace) GetName() string {
 
 func (o *OzonMarketplace) Search(ctx context.Context, query string, limit int) (*SearchResult, error) {
 	targetURL := fmt.Sprintf("https://www.ozon.ru/search/?text=%s", url.QueryEscape(query))
-	scraperURL := fmt.Sprintf("http://api.scraperapi.com/?api_key=%s&url=%s&render=true&premium=true&country_code=ru", o.ScraperAPIKey, url.QueryEscape(targetURL))
+	scraperURL := fmt.Sprintf("http://api.scraperapi.com/?api_key=%s&url=%s&anti_bot=true&country_code=ru", o.ScraperAPIKey, url.QueryEscape(targetURL))
 
 	log.Printf("[OZON] Sending request via ScraperAPI: %s", targetURL)
 

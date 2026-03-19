@@ -66,11 +66,30 @@ func (a *AvitoMarketplace) Search(ctx context.Context, query string, limit int) 
 
 func (a *AvitoMarketplace) parseHTML(html string, limit int) []Product {
 	var products []Product
-	seen := make(map[string]bool)
 
-	// Ищем ЛЮБЫЕ ссылки, которые заканчиваются на _ и минимум 8 цифр (это ID объявления)
-	pattern := regexp.MustCompile(`href="(/[^"]+_[0-9]{8,})"`)
-	matches := pattern.FindAllStringSubmatch(html, limit*5)
+	// Авито прячет JSON с данными в window.__initialData__ (URL-encoded)
+	// Ищем этот кусок скрипта
+	jsonPattern := regexp.MustCompile(`window\.__initialData__\s*=\s*"([^"]+)"`)
+	jsonMatch := jsonPattern.FindStringSubmatch(html)
+
+	if len(jsonMatch) < 2 {
+		log.Printf("[AVITO] Failed to find __initialData__")
+		return products
+	}
+
+	// Декодируем URL-encoded строку
+	decodedJSON, err := url.QueryUnescape(jsonMatch[1])
+	if err != nil {
+		log.Printf("[AVITO] Failed to unescape JSON: %v", err)
+		return products
+	}
+
+	// Чтобы не строить сложную структуру, вытаскиваем нужные данные простыми регулярками прямо из JSON!
+	// Ищем блоки с объявлениями (начинаются с "url":"/...)
+	itemPattern := regexp.MustCompile(`"url":"(/[^"]+_([0-9]{8,}))".*?"title":"([^"]+)".*?"price":\{"value":([0-9]+)`)
+	matches := itemPattern.FindAllStringSubmatch(decodedJSON, limit*2)
+
+	seen := make(map[string]bool)
 
 	for _, match := range matches {
 		if len(products) >= limit {
@@ -78,43 +97,39 @@ func (a *AvitoMarketplace) parseHTML(html string, limit int) []Product {
 		}
 
 		rawURL := match[1]
+		idMatch := match[2]
+		name := match[3]
+		priceStr := match[4]
 
-		// Достаем ID (всё, что после последнего подчеркивания)
-		parts := strings.Split(rawURL, "_")
-		idMatch := parts[len(parts)-1]
-
-		// Отсеиваем дубликаты и мусор (например, профили пользователей)
-		if seen[idMatch] || strings.Contains(rawURL, "/user/") {
+		// Игнорируем дубликаты
+		if seen[idMatch] {
 			continue
 		}
 		seen[idMatch] = true
 
 		fullURL := "https://www.avito.ru" + rawURL
 
-		// Ищем цену рядом со ссылкой
-		price := float64(0)
-		idx := strings.Index(html, match[0])
-		if idx != -1 {
-			endIdx := min(idx+800, len(html))
-			nearbyText := html[idx:endIdx]
+		// Авито отдает цену сразу числом
+		price := extractPrice(priceStr)
 
-			// Ищем мета-тег цены ИЛИ просто цифры со знаком ₽
-			pricePattern := regexp.MustCompile(`(?:content="|">)([0-9\s\x{00A0}]+)(?:&nbsp;)?(?:₽|")`)
-			if priceMatch := pricePattern.FindStringSubmatch(nearbyText); len(priceMatch) > 1 {
-				price = extractPrice(priceMatch[1])
-			}
+		// Ищем в названии признаки нового товара
+		condition := "Б/У"
+		lowerName := strings.ToLower(name)
+		if strings.Contains(lowerName, "нов") || strings.Contains(lowerName, "запечатан") {
+			condition = "Новое"
 		}
 
 		products = append(products, Product{
 			ID:          idMatch,
-			Name:        "Товар Авито " + idMatch, // Название пока заглушка
+			Name:        cleanString(name),
 			Price:       price,
 			URL:         fullURL,
 			Marketplace: "Avito",
-			Condition:   "Б/У",
+			Condition:   condition,
 			InStock:     true,
 		})
 	}
-	log.Printf("[AVITO] Parsed %d products", len(products))
+
+	log.Printf("[AVITO] Parsed %d products from JSON", len(products))
 	return products
 }
