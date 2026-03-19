@@ -19,14 +19,14 @@ services:
       - TBANK_SECRET_KEY=${TBANK_SECRET_KEY}
       - TBANK_BASE_URL=https://securepay.tinkoff.ru/v2
       - WEBHOOK_URL=${WEBHOOK_URL}
-      - SERVER_PORT=8081
+      - SERVER_PORT=8080
       - ADMIN_TELEGRAM_ID=${ADMIN_TELEGRAM_ID}
       - PRO_SUBSCRIPTION_PRICE=${PRO_SUBSCRIPTION_PRICE}
       - SCRAPER_API_KEY=${SCRAPER_API_KEY}
       - OPENAI_KEY=${OPENAI_KEY}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL}
     ports:
-      - "8080:8081"
+      - "8081:8080"
     shm_size: '2gb'
     security_opt:
       - seccomp:unconfined
