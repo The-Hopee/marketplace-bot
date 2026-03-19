@@ -68,9 +68,9 @@ func (a *AvitoMarketplace) parseHTML(html string, limit int) []Product {
 	var products []Product
 	seen := make(map[string]bool)
 
-	// АГРЕССИВНЫЙ ПАРСИНГ АВИТО (ищем микроразметку schema.org)
-	pattern := regexp.MustCompile(`itemprop="url"\s+href="(/[^"]+_([0-9]+))"`)
-	matches := pattern.FindAllStringSubmatch(html, limit*3)
+	// Ищем ЛЮБЫЕ ссылки, которые заканчиваются на _ и минимум 8 цифр (это ID объявления)
+	pattern := regexp.MustCompile(`href="(/[^"]+_[0-9]{8,})"`)
+	matches := pattern.FindAllStringSubmatch(html, limit*5)
 
 	for _, match := range matches {
 		if len(products) >= limit {
@@ -78,23 +78,28 @@ func (a *AvitoMarketplace) parseHTML(html string, limit int) []Product {
 		}
 
 		rawURL := match[1]
-		idMatch := match[2]
 
-		if seen[idMatch] {
+		// Достаем ID (всё, что после последнего подчеркивания)
+		parts := strings.Split(rawURL, "_")
+		idMatch := parts[len(parts)-1]
+
+		// Отсеиваем дубликаты и мусор (например, профили пользователей)
+		if seen[idMatch] || strings.Contains(rawURL, "/user/") {
 			continue
 		}
 		seen[idMatch] = true
 
 		fullURL := "https://www.avito.ru" + rawURL
 
-		// Ищем цену
+		// Ищем цену рядом со ссылкой
 		price := float64(0)
 		idx := strings.Index(html, match[0])
 		if idx != -1 {
 			endIdx := min(idx+800, len(html))
 			nearbyText := html[idx:endIdx]
 
-			pricePattern := regexp.MustCompile(`itemprop="price"\s+content="([0-9]+)"`)
+			// Ищем мета-тег цены ИЛИ просто цифры со знаком ₽
+			pricePattern := regexp.MustCompile(`(?:content="|">)([0-9\s\x{00A0}]+)(?:&nbsp;)?(?:₽|")`)
 			if priceMatch := pricePattern.FindStringSubmatch(nearbyText); len(priceMatch) > 1 {
 				price = extractPrice(priceMatch[1])
 			}
@@ -102,7 +107,7 @@ func (a *AvitoMarketplace) parseHTML(html string, limit int) []Product {
 
 		products = append(products, Product{
 			ID:          idMatch,
-			Name:        "Товар Авито " + idMatch,
+			Name:        "Товар Авито " + idMatch, // Название пока заглушка
 			Price:       price,
 			URL:         fullURL,
 			Marketplace: "Avito",
