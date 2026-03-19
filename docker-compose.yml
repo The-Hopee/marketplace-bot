@@ -25,6 +25,8 @@ services:
       - SCRAPER_API_KEY=${SCRAPER_API_KEY}
       - OPENAI_KEY=${OPENAI_KEY}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL}
+    volumes:
+      - ./debug_html:/app/debug_html 
     ports:
       - "8081:8080"
     shm_size: '2gb'

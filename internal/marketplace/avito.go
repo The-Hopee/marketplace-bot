@@ -11,6 +11,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"time"
 )
 
 type AvitoMarketplace struct {
@@ -31,65 +32,34 @@ func (a *AvitoMarketplace) Search(ctx context.Context, query string, limit int) 
 	targetURL := fmt.Sprintf("https://www.avito.ru/all?q=%s", url.QueryEscape(query))
 	scraperURL := fmt.Sprintf("http://api.scraperapi.com/?api_key=%s&url=%s&premium=true&country_code=ru", a.ScraperAPIKey, url.QueryEscape(targetURL))
 
-	log.Printf("[AVITO] Sending request via ScraperAPI: %s", targetURL)
+	log.Printf("[AVITO] Sending request: %s", targetURL)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, scraperURL, nil)
-	if err != nil {
-		return nil, err
-	}
-
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, scraperURL, nil)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
+	body, _ := io.ReadAll(resp.Body)
 	html := string(body)
 
-	// СОХРАНЯЕМ HTML ДЛЯ ОТЛАДКИ
-	log.Printf("[AVITO] Page loaded, size: %d bytes", len(html))
-	_ = os.WriteFile("/tmp/debug_avito.html", body, 0644)
+	// СОХРАНЯЕМ В ПРОБРОШЕННУЮ ПАПКУ
+	filename := fmt.Sprintf("debug_html/avito_%d.html", time.Now().Unix())
+	_ = os.WriteFile(filename, body, 0644)
+	log.Printf("[AVITO] HTML saved to: %s (Size: %d bytes)", filename, len(html))
 
 	products := a.parseHTML(html, limit)
-
-	return &SearchResult{
-		Products:   products,
-		TotalCount: len(products),
-		Query:      query,
-	}, nil
+	return &SearchResult{Products: products, TotalCount: len(products), Query: query}, nil
 }
 
 func (a *AvitoMarketplace) parseHTML(html string, limit int) []Product {
 	var products []Product
-
-	// Авито прячет JSON с данными в window.__initialData__ (URL-encoded)
-	// Ищем этот кусок скрипта
-	jsonPattern := regexp.MustCompile(`window\.__initialData__\s*=\s*"([^"]+)"`)
-	jsonMatch := jsonPattern.FindStringSubmatch(html)
-
-	if len(jsonMatch) < 2 {
-		log.Printf("[AVITO] Failed to find __initialData__")
-		return products
-	}
-
-	// Декодируем URL-encoded строку
-	decodedJSON, err := url.QueryUnescape(jsonMatch[1])
-	if err != nil {
-		log.Printf("[AVITO] Failed to unescape JSON: %v", err)
-		return products
-	}
-
-	// Чтобы не строить сложную структуру, вытаскиваем нужные данные простыми регулярками прямо из JSON!
-	// Ищем блоки с объявлениями (начинаются с "url":"/...)
-	itemPattern := regexp.MustCompile(`"url":"(/[^"]+_([0-9]{8,}))".*?"title":"([^"]+)".*?"price":\{"value":([0-9]+)`)
-	matches := itemPattern.FindAllStringSubmatch(decodedJSON, limit*2)
-
 	seen := make(map[string]bool)
+
+	// САМАЯ БАЗОВАЯ РЕГУЛЯРКА: ищем тупо все ссылки на объявления
+	pattern := regexp.MustCompile(`href="(/[^"]+_([0-9]{8,}))"`)
+	matches := pattern.FindAllStringSubmatch(html, limit*5)
 
 	for _, match := range matches {
 		if len(products) >= limit {
@@ -98,38 +68,36 @@ func (a *AvitoMarketplace) parseHTML(html string, limit int) []Product {
 
 		rawURL := match[1]
 		idMatch := match[2]
-		name := match[3]
-		priceStr := match[4]
 
-		// Игнорируем дубликаты
-		if seen[idMatch] {
+		if seen[idMatch] || strings.Contains(rawURL, "/user/") {
 			continue
 		}
 		seen[idMatch] = true
 
-		fullURL := "https://www.avito.ru" + rawURL
+		// Пытаемся найти хоть какую-то цену рядом
+		price := float64(0)
+		idx := strings.Index(html, match[0])
+		if idx != -1 {
+			endIdx := min(idx+800, len(html))
+			nearbyText := html[idx:endIdx]
 
-		// Авито отдает цену сразу числом
-		price := extractPrice(priceStr)
-
-		// Ищем в названии признаки нового товара
-		condition := "Б/У"
-		lowerName := strings.ToLower(name)
-		if strings.Contains(lowerName, "нов") || strings.Contains(lowerName, "запечатан") {
-			condition = "Новое"
+			// Ищем просто 5-6 цифр подряд со знаком рубля или словом rub
+			pricePattern := regexp.MustCompile(`([0-9\s\x{00A0}]{3,10})(?:₽|rub|руб)`)
+			if priceMatch := pricePattern.FindStringSubmatch(strings.ToLower(nearbyText)); len(priceMatch) > 1 {
+				price = extractPrice(priceMatch[1])
+			}
 		}
 
 		products = append(products, Product{
 			ID:          idMatch,
-			Name:        cleanString(name),
+			Name:        "Товар Авито " + idMatch,
 			Price:       price,
-			URL:         fullURL,
+			URL:         "https://www.avito.ru" + rawURL,
 			Marketplace: "Avito",
-			Condition:   condition,
+			Condition:   "Б/У",
 			InStock:     true,
 		})
 	}
-
-	log.Printf("[AVITO] Parsed %d products from JSON", len(products))
+	log.Printf("[AVITO] Parsed %d products", len(products))
 	return products
 }

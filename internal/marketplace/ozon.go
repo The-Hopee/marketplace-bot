@@ -11,6 +11,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"time"
 )
 
 type OzonMarketplace struct {
@@ -29,39 +30,29 @@ func (o *OzonMarketplace) GetName() string {
 
 func (o *OzonMarketplace) Search(ctx context.Context, query string, limit int) (*SearchResult, error) {
 	targetURL := fmt.Sprintf("https://www.ozon.ru/search/?text=%s", url.QueryEscape(query))
-	scraperURL := fmt.Sprintf("http://api.scraperapi.com/?api_key=%s&url=%s&anti_bot=true&country_code=ru", o.ScraperAPIKey, url.QueryEscape(targetURL))
 
-	log.Printf("[OZON] Sending request via ScraperAPI: %s", targetURL)
+	// Используем мобильный рендер (часто на Озоне мобильная версия защищена слабее)
+	scraperURL := fmt.Sprintf("http://api.scraperapi.com/?api_key=%s&url=%s&render=true&premium=true&country_code=ru&device_type=mobile", o.ScraperAPIKey, url.QueryEscape(targetURL))
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, scraperURL, nil)
-	if err != nil {
-		return nil, err
-	}
+	log.Printf("[OZON] Sending request: %s", targetURL)
 
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, scraperURL, nil)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
+	body, _ := io.ReadAll(resp.Body)
 	html := string(body)
 
-	// СОХРАНЯЕМ HTML ДЛЯ ОТЛАДКИ (как на WB)
-	log.Printf("[OZON] Page loaded, size: %d bytes", len(html))
-	_ = os.WriteFile("/tmp/debug_ozon.html", body, 0644)
+	// СОХРАНЯЕМ В ПРОБРОШЕННУЮ ПАПКУ
+	filename := fmt.Sprintf("debug_html/ozon_%d.html", time.Now().Unix())
+	_ = os.WriteFile(filename, body, 0644)
+	log.Printf("[OZON] HTML saved to: %s (Size: %d bytes)", filename, len(html))
 
 	products := o.parseHTML(html, limit)
-
-	return &SearchResult{
-		Products:   products,
-		TotalCount: len(products),
-		Query:      query,
-	}, nil
+	return &SearchResult{Products: products, TotalCount: len(products), Query: query}, nil
 }
 
 func (o *OzonMarketplace) parseHTML(html string, limit int) []Product {
