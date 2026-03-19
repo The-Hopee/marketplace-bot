@@ -26,7 +26,7 @@ services:
       - OPENAI_KEY=${OPENAI_KEY}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL}
     ports:
-      - "8080:8080"
+      - "8080:8081"
     shm_size: '2gb'
     security_opt:
       - seccomp:unconfined
