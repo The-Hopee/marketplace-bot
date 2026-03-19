@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 )
@@ -27,16 +28,8 @@ func (a *AvitoMarketplace) GetName() string {
 }
 
 func (a *AvitoMarketplace) Search(ctx context.Context, query string, limit int) (*SearchResult, error) {
-	if a.ScraperAPIKey == "" {
-		return nil, fmt.Errorf("scraperapi key is missing")
-	}
-
-	// Поиск по всей России
 	targetURL := fmt.Sprintf("https://www.avito.ru/all?q=%s", url.QueryEscape(query))
-
-	// Для Авито обязательно premium прокси и RU гео
-	scraperURL := fmt.Sprintf("http://api.scraperapi.com/?api_key=%s&url=%s&premium=true&country_code=ru",
-		a.ScraperAPIKey, url.QueryEscape(targetURL))
+	scraperURL := fmt.Sprintf("http://api.scraperapi.com/?api_key=%s&url=%s&premium=true&country_code=ru", a.ScraperAPIKey, url.QueryEscape(targetURL))
 
 	log.Printf("[AVITO] Sending request via ScraperAPI: %s", targetURL)
 
@@ -47,7 +40,7 @@ func (a *AvitoMarketplace) Search(ctx context.Context, query string, limit int) 
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("scraperapi avito request failed: %w", err)
+		return nil, err
 	}
 	defer resp.Body.Close()
 
@@ -57,6 +50,11 @@ func (a *AvitoMarketplace) Search(ctx context.Context, query string, limit int) 
 	}
 
 	html := string(body)
+
+	// СОХРАНЯЕМ HTML ДЛЯ ОТЛАДКИ
+	log.Printf("[AVITO] Page loaded, size: %d bytes", len(html))
+	_ = os.WriteFile("/tmp/debug_avito.html", body, 0644)
+
 	products := a.parseHTML(html, limit)
 
 	return &SearchResult{
@@ -70,29 +68,17 @@ func (a *AvitoMarketplace) parseHTML(html string, limit int) []Product {
 	var products []Product
 	seen := make(map[string]bool)
 
-	// Ищем карточки объявлений (Avito использует data-marker="item")
-	// Вытаскиваем сразу кусок HTML, относящийся к одной карточке
-	cardPattern := regexp.MustCompile(`(?s)data-marker="item"(.*?)data-marker="item-photo"`)
-	cards := cardPattern.FindAllStringSubmatch(html, limit*2)
+	// АГРЕССИВНЫЙ ПАРСИНГ АВИТО (ищем микроразметку schema.org)
+	pattern := regexp.MustCompile(`itemprop="url"\s+href="(/[^"]+_([0-9]+))"`)
+	matches := pattern.FindAllStringSubmatch(html, limit*3)
 
-	for _, card := range cards {
+	for _, match := range matches {
 		if len(products) >= limit {
 			break
 		}
 
-		cardHTML := card[1]
-
-		// Извлекаем ссылку и название (из атрибута title внутри a)
-		linkPattern := regexp.MustCompile(`href="(/[^"]+_([0-9]+))"[^>]*title="([^"]+)"`)
-		linkMatch := linkPattern.FindStringSubmatch(cardHTML)
-
-		if len(linkMatch) < 4 {
-			continue
-		}
-
-		rawURL := linkMatch[1]
-		idMatch := linkMatch[2]
-		name := cleanString(linkMatch[3]) // Очищаем от HTML-сущностей
+		rawURL := match[1]
+		idMatch := match[2]
 
 		if seen[idMatch] {
 			continue
@@ -101,35 +87,29 @@ func (a *AvitoMarketplace) parseHTML(html string, limit int) []Product {
 
 		fullURL := "https://www.avito.ru" + rawURL
 
-		// Извлекаем цену (ищем атрибут content у meta itemprop="price")
+		// Ищем цену
 		price := float64(0)
-		pricePattern := regexp.MustCompile(`meta\s+itemprop="price"\s+content="([0-9]+)"`)
-		priceMatch := pricePattern.FindStringSubmatch(cardHTML)
-		if len(priceMatch) > 1 {
-			price = extractPrice(priceMatch[1])
-		}
+		idx := strings.Index(html, match[0])
+		if idx != -1 {
+			endIdx := min(idx+800, len(html))
+			nearbyText := html[idx:endIdx]
 
-		// Определяем состояние (Новое или Б/У)
-		condition := "Б/У" // По умолчанию на Авито продают б/у
-		lowerName := strings.ToLower(name)
-		lowerCard := strings.ToLower(cardHTML)
-
-		// Проверяем по ключевым словам в названии и теле карточки
-		if strings.Contains(lowerName, "нов") || strings.Contains(lowerName, "запечатан") || strings.Contains(lowerCard, "состояние: новое") {
-			condition = "Новое"
+			pricePattern := regexp.MustCompile(`itemprop="price"\s+content="([0-9]+)"`)
+			if priceMatch := pricePattern.FindStringSubmatch(nearbyText); len(priceMatch) > 1 {
+				price = extractPrice(priceMatch[1])
+			}
 		}
 
 		products = append(products, Product{
 			ID:          idMatch,
-			Name:        name,
+			Name:        "Товар Авито " + idMatch,
 			Price:       price,
 			URL:         fullURL,
 			Marketplace: "Avito",
-			Condition:   condition,
+			Condition:   "Б/У",
 			InStock:     true,
 		})
 	}
-
 	log.Printf("[AVITO] Parsed %d products", len(products))
 	return products
 }
