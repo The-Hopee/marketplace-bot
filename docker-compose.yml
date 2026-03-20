@@ -32,6 +32,9 @@ services:
     shm_size: '2gb'
     security_opt:
       - seccomp:unconfined
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
 
   postgres:
     image: postgres:15-alpine
@@ -65,3 +68,8 @@ services:
 volumes:
   postgres_data:
   redis_data:
+networks:
+  default:
+    driver: bridge
+    driver_opts:
+      com.docker.network.driver.mtu: 1400
