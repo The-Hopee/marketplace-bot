@@ -22,7 +22,7 @@ services:
       - SERVER_PORT=8080
       - ADMIN_TELEGRAM_ID=${ADMIN_TELEGRAM_ID}
       - PRO_SUBSCRIPTION_PRICE=${PRO_SUBSCRIPTION_PRICE}
-      - XMLRIVER_URL=${XMLRIVER_URL}
+      - XMLRIVER_URL=http://xmlriver.com/search_yandex/json?user=20458&key=fcc41ed257fde26b7a8df3e833cbb62cc96e24a3
       - OPENAI_KEY=${OPENAI_KEY}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL}
     volumes:
