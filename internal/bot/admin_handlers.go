@@ -118,9 +118,10 @@ func (h *AdminHandlers) showMenu(chatID int64) {
 
 🎟 *Промокоды:*
 /promos — Список
-/addpromo CODE ДНИ [ЛИМИТ]
-/delpromo CODE
-/togglepromo CODE
+/addpromo КОД ДНИ УРОВЕНЬ [ЛИМИТ]
+_(Уровень: premium или pro)_
+/delpromo КОД
+/togglepromo КОД
 
 📢 *Реклама:*
 /ads — Список
