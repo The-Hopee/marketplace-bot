@@ -2,37 +2,37 @@ package marketplace
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"net/url"
 	"regexp"
+	"strings"
 )
 
 type OzonMarketplace struct {
-	XMLRiverURL string // Твой URL от сервиса XMLRiver
+	XMLRiverURL string
 }
 
 func NewOzon(xmlRiverURL string) *OzonMarketplace {
-	return &OzonMarketplace{
-		XMLRiverURL: xmlRiverURL,
-	}
+	return &OzonMarketplace{XMLRiverURL: xmlRiverURL}
 }
 
 func (o *OzonMarketplace) GetName() string {
 	return "OZON"
 }
 
-// XMLRiverResponse описывает структуру ответа сервиса (зависит от того, JSON или XML ты выберешь в настройках)
-// Ниже пример для JSON-ответа.
-type XMLRiverResponse struct {
-	Items []struct {
-		URL   string `json:"url"`
-		Title string `json:"title"`
-		Text  string `json:"text"` // Сниппет (описание)
-	} `json:"items"`
+// ИДЕАЛЬНАЯ СТРУКТУРА ПОД ТВОЙ XML
+type YandexXMLResponse struct {
+	XMLName xml.Name `xml:"yandexsearch"`
+	Docs    []struct {
+		URL      string   `xml:"url"`
+		Title    string   `xml:"title"`
+		Passages []string `xml:"passages>passage"`
+		Price    float64  `xml:"price"` // Яндекс сам отдает цену!
+	} `xml:"response>results>grouping>group>doc"`
 }
 
 func (o *OzonMarketplace) Search(ctx context.Context, query string, limit int) (*SearchResult, error) {
@@ -41,17 +41,11 @@ func (o *OzonMarketplace) Search(ctx context.Context, query string, limit int) (
 	}
 
 	yandexQuery := fmt.Sprintf("%s site:ozon.ru/product/", query)
-
-	// Формируем запрос к XMLRiver
 	apiURL := fmt.Sprintf("%s&query=%s", o.XMLRiverURL, url.QueryEscape(yandexQuery))
 
-	log.Printf("[OZON] Sending request to XMLRiver: %s", yandexQuery)
+	log.Printf("[OZON] Sending request to XMLRiver: %s", apiURL)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
-	if err != nil {
-		return nil, err
-	}
-
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
@@ -63,23 +57,23 @@ func (o *OzonMarketplace) Search(ctx context.Context, query string, limit int) (
 		return nil, err
 	}
 
-	var riverData XMLRiverResponse
-	if err := json.Unmarshal(body, &riverData); err != nil {
-		log.Printf("[OZON] Failed to parse XMLRiver JSON. Body: %s", string(body))
+	var riverData YandexXMLResponse
+	if err := xml.Unmarshal(body, &riverData); err != nil {
+		log.Printf("[OZON] Failed to parse XML. Error: %v\nBody: %s", err, string(body)[:min(len(body), 500)])
 		return nil, err
 	}
 
 	var products []Product
 	seen := make(map[string]bool)
 
-	for _, item := range riverData.Items {
+	for _, doc := range riverData.Docs {
 		if len(products) >= limit {
 			break
 		}
 
-		// Достаем ID из ссылки
+		// Озон ссылки
 		linkPattern := regexp.MustCompile(`ozon\.ru/product/([^"/]+-[0-9]+)`)
-		linkMatch := linkPattern.FindStringSubmatch(item.URL)
+		linkMatch := linkPattern.FindStringSubmatch(doc.URL)
 		if len(linkMatch) < 2 {
 			continue
 		}
@@ -90,36 +84,32 @@ func (o *OzonMarketplace) Search(ctx context.Context, query string, limit int) (
 		}
 		seen[idMatch] = true
 
-		// Ищем цену в описании (сниппете)
-		price := float64(0)
-		pricePattern := regexp.MustCompile(`(?:от\s*)?([0-9\s\x{00A0}]+)(?:₽|руб)`)
-		if pMatch := pricePattern.FindStringSubmatch(item.Text); len(pMatch) > 1 {
-			price = extractPrice(pMatch[1])
-		}
+		// 1. Берем цену прямо из Яндекса!
+		price := doc.Price
 
+		// 2. Если Яндекс не нашел тег price, ищем в тексте
 		if price == 0 {
-			fallbackPattern := regexp.MustCompile(`([0-9]{1,3}(?:\s[0-9]{3})+)\s*₽`)
-			if fbMatch := fallbackPattern.FindStringSubmatch(item.Text); len(fbMatch) > 1 {
-				price = extractPrice(fbMatch[1])
+			textToSearch := doc.Title + " " + strings.Join(doc.Passages, " ")
+			pricePattern := regexp.MustCompile(`(?:от\s*)?([0-9\s\x{00A0}]+)(?:₽|руб)`)
+			if pMatch := pricePattern.FindStringSubmatch(textToSearch); len(pMatch) > 1 {
+				price = extractPrice(pMatch[1])
+			}
+			if price == 0 {
+				fallbackPattern := regexp.MustCompile(`([0-9]{1,3}(?:\s[0-9]{3})+)\s*₽`)
+				if fbMatch := fallbackPattern.FindStringSubmatch(textToSearch); len(fbMatch) > 1 {
+					price = extractPrice(fbMatch[1])
+				}
 			}
 		}
 
+		cleanTitle := regexp.MustCompile(`<[^>]*>`).ReplaceAllString(doc.Title, "")
+
 		products = append(products, Product{
-			ID:          idMatch,
-			Name:        item.Title,
-			Price:       price,
-			URL:         item.URL,
-			Marketplace: "OZON",
-			Condition:   "Новое",
-			InStock:     true,
+			ID: idMatch, Name: cleanString(cleanTitle), Price: price,
+			URL: doc.URL, Marketplace: "OZON", Condition: "Новое", InStock: true,
 		})
 	}
 
 	log.Printf("[OZON] Found %d products via XMLRiver", len(products))
-
-	return &SearchResult{
-		Products:   products,
-		TotalCount: len(products),
-		Query:      query,
-	}, nil
+	return &SearchResult{Products: products, TotalCount: len(products), Query: query}, nil
 }
