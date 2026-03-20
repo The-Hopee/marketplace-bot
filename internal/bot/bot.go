@@ -58,8 +58,8 @@ func New(cfg *config.Config, db *database.DB, redisCache *cache.RedisCache) (*Bo
 	// Админ-хендлеры
 	adminHandlers := NewAdminHandlers(api, repo, broadcastSvc, adSvc, cfg.AdminTelegramID)
 
-	// Агрегатор (передаем ключ ScraperAPI)
-	aggregator := marketplace.NewAggregator(cfg.ScraperAPIKey)
+	// Агрегатор (передаем URL от XMLRiver)
+	aggregator := marketplace.NewAggregator(cfg.XMLRiverURL)
 
 	// Инициализируем AI-Агента
 	aiAgent := analysis.NewAIAgent(cfg.OpenAIKey, cfg.OpenAIBaseURL)

@@ -24,7 +24,7 @@ type Config struct {
 	ServerPort           string
 	AdminTelegramID      int64
 
-	ScraperAPIKey string
+	XMLRiverURL   string
 	OpenAIKey     string
 	OpenAIBaseURL string
 }
@@ -55,7 +55,7 @@ func Load() (*Config, error) {
 		WebhookURL:           os.Getenv("WEBHOOK_URL"),
 		ServerPort:           getEnv("SERVER_PORT", "8080"),
 		AdminTelegramID:      ID,
-		ScraperAPIKey:        os.Getenv("SCRAPER_API_KEY"),
+		XMLRiverURL:          os.Getenv("XMLRiverURL"),
 		OpenAIKey:            os.Getenv("OPENAI_KEY"),
 		OpenAIBaseURL:        aiBaseURL,
 	}, nil

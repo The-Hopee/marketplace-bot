@@ -14,11 +14,11 @@ type Aggregator struct {
 	avito Marketplace
 }
 
-func NewAggregator(scraperAPIKey string) *Aggregator {
+func NewAggregator(xmlRiverURL string) *Aggregator {
 	return &Aggregator{
 		wb:    NewWildberries(),
-		ozon:  NewOzon(scraperAPIKey),
-		avito: NewAvito(scraperAPIKey),
+		ozon:  NewOzon(xmlRiverURL),
+		avito: NewAvito(xmlRiverURL),
 	}
 }
 
