@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -29,7 +30,7 @@ func (a *AvitoMarketplace) Search(ctx context.Context, query string, limit int) 
 		return nil, fmt.Errorf("XMLRiver URL is empty")
 	}
 
-	yandexQuery := fmt.Sprintf("%s site:avito.ru -inurl:all -inurl:q=", query)
+	yandexQuery := fmt.Sprintf("%s купить site:avito.ru", query)
 	apiURL := fmt.Sprintf("%s&query=%s", a.XMLRiverURL, url.QueryEscape(yandexQuery))
 
 	log.Printf("[AVITO] Sending request to XMLRiver: %s", apiURL)
@@ -48,7 +49,7 @@ func (a *AvitoMarketplace) Search(ctx context.Context, query string, limit int) 
 
 	var riverData YandexXMLResponse
 	if err := xml.Unmarshal(body, &riverData); err != nil {
-		log.Printf("[AVITO] Failed to parse XML. Error: %v", err)
+		log.Printf("[AVITO] XML Parse Error: %v", err)
 		return nil, err
 	}
 
@@ -60,7 +61,8 @@ func (a *AvitoMarketplace) Search(ctx context.Context, query string, limit int) 
 			break
 		}
 
-		linkPattern := regexp.MustCompile(`(?i)avito\.ru/.*?_([0-9]{8,})`)
+		// Берем любые ссылки Авито
+		linkPattern := regexp.MustCompile(`(?i)avito\.ru/([^"]+)`)
 		linkMatch := linkPattern.FindStringSubmatch(doc.URL)
 		if len(linkMatch) < 2 {
 			continue
@@ -73,18 +75,13 @@ func (a *AvitoMarketplace) Search(ctx context.Context, query string, limit int) 
 		seen[idMatch] = true
 
 		price := doc.Price
-		textToSearch := doc.Title + " " + strings.Join(doc.Passages, " ")
+		textToSearch := strings.ReplaceAll(doc.Title+" "+strings.Join(doc.Passages, " "), "&nbsp;", "")
 
 		if price == 0 {
-			pricePattern := regexp.MustCompile(`(?:от\s*)?([0-9\s\x{00A0}]+)(?:₽|руб)`)
-			if pMatch := pricePattern.FindStringSubmatch(textToSearch); len(pMatch) > 1 {
-				price = extractPrice(pMatch[1])
-			}
-			if price == 0 {
-				fallbackPattern := regexp.MustCompile(`([0-9]{1,3}(?:\s[0-9]{3})+)\s*₽`)
-				if fbMatch := fallbackPattern.FindStringSubmatch(textToSearch); len(fbMatch) > 1 {
-					price = extractPrice(fbMatch[1])
-				}
+			re := regexp.MustCompile(`([0-9\s]{3,10})\s*(?:₽|руб|р\.)`)
+			if matches := re.FindAllStringSubmatch(textToSearch, -1); len(matches) > 0 {
+				cleanNum := regexp.MustCompile(`\D`).ReplaceAllString(matches[0][1], "")
+				price, _ = strconv.ParseFloat(cleanNum, 64)
 			}
 		}
 
@@ -95,6 +92,9 @@ func (a *AvitoMarketplace) Search(ctx context.Context, query string, limit int) 
 		}
 
 		cleanTitle := regexp.MustCompile(`<[^>]*>`).ReplaceAllString(doc.Title, "")
+		if cleanTitle == "" {
+			cleanTitle = "Товар Авито"
+		}
 
 		products = append(products, Product{
 			ID: idMatch, Name: cleanString(cleanTitle), Price: price,

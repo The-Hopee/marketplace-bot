@@ -34,29 +34,27 @@ func (a *AIAgent) Analyze(ctx context.Context, result *marketplace.AggregatedRes
 		return "😔 К сожалению, я не смог найти товары по вашему запросу.", nil
 	}
 
-	// Подготавливаем данные для ИИ (чтобы сэкономить токены, берем только топ-3 товара с каждой площадки)
 	type CompactProduct struct {
 		Name        string  `json:"name"`
 		Price       float64 `json:"price"`
 		Discount    int     `json:"discount,omitempty"`
 		URL         string  `json:"url"`
 		Marketplace string  `json:"marketplace"`
-		Condition   string  `json:"condition,omitempty"` // Новое/Б.У. для Авито
+		Condition   string  `json:"condition,omitempty"`
 	}
 
 	var compactData []CompactProduct
 
 	for mpName, products := range result.Results {
-		limit := min(3, len(products)) // берем до 3 лучших с каждого маркетплейса
+		limit := min(3, len(products))
 		for i := 0; i < limit; i++ {
 			p := products[i]
-			// Если цена 0, пропускаем
-			if p.Price <= 0 {
-				continue
-			}
+
+			// МЫ БОЛЬШЕ НЕ УДАЛЯЕМ ТОВАРЫ С НУЛЕВОЙ ЦЕНОЙ!
+			// ИИ сам разберется.
 
 			cp := CompactProduct{
-				Name:        truncateUTF8(p.Name, 60), // обрезаем слишком длинные названия
+				Name:        truncateUTF8(p.Name, 100), // Увеличили длину для большей информативности
 				Price:       p.Price,
 				Discount:    p.Discount,
 				URL:         p.URL,
@@ -68,7 +66,7 @@ func (a *AIAgent) Analyze(ctx context.Context, result *marketplace.AggregatedRes
 	}
 
 	if len(compactData) == 0 {
-		return "😔 Нашел товары, но не смог получить по ним цены.", nil
+		return "😔 Нашел товары, но не смог подготовить данные для анализа.", nil
 	}
 
 	jsonData, err := json.Marshal(compactData)
@@ -76,18 +74,18 @@ func (a *AIAgent) Analyze(ctx context.Context, result *marketplace.AggregatedRes
 		return "", fmt.Errorf("failed to marshal data for AI: %w", err)
 	}
 
-	// Системный промпт для GPT-4o
 	systemPrompt := `Ты — профессиональный шопинг-ассистент и аналитик маркетплейсов.
-Твоя задача: проанализировать предоставленный JSON с товарами с разных маркетплейсов (Wildberries, Ozon, Avito).
-Сделай следующее:
-1. Выбери САМЫЙ ЛУЧШИЙ товар среди конкретного маркетплейса и объясни почему (цена, скидка).
-2. Выбери АБСОЛЮТНО ЛУЧШИЙ товар среди ВСЕХ маркетплейсов и обоснуй выбор.
-ВАЖНО: Если лучший товар с Avito, ОЩУТИМО сделай акцент на его состоянии ("Новое" или "Б/У"). Обязательно предупреди пользователя о рисках покупки Б/У, если товар не новый.
-3. В конце приложи ссылки на победителей.
-Отвечай структурированно, используй эмодзи для красивого оформления (📦, 💰, ⚠️, 🏆). Форматируй текст жирным там, где это уместно. Не пиши код или сырой JSON в ответе.`
+Твоя задача: проанализировать предоставленный JSON с товарами (Wildberries, Ozon, Avito).
+ВАЖНЫЕ ПРАВИЛА:
+1. Если пользователь ищет дорогую технику (смартфон, ноутбук), а в списке есть дешевые чехлы, стекла, коробки или аксессуары — ИГНОРИРУЙ ИХ! Анализируй только саму технику.
+2. Если у товара Price равна 0, это значит цена не указана в предпросмотре. Не выкидывай товар! Просто напиши "Цена по запросу на сайте".
+3. Выбери САМЫЙ ЛУЧШИЙ товар среди конкретного маркетплейса.
+4. Выбери АБСОЛЮТНО ЛУЧШИЙ товар среди ВСЕХ маркетплейсов и обоснуй выбор.
+5. Если лучший товар с Avito, ОЩУТИМО сделай акцент на его состоянии ("Новое" или "Б/У").
+Отвечай структурированно, используй эмодзи (📦, 💰, ⚠️, 🏆). В конце приложи ссылки на победителей. Не пиши код или сырой JSON в ответе.`
 
 	req := openai.ChatCompletionRequest{
-		Model: "gpt-4o-mini",
+		Model: "gpt-4o-mini", // Дешево и круто
 		Messages: []openai.ChatCompletionMessage{
 			{
 				Role:    openai.ChatMessageRoleSystem,

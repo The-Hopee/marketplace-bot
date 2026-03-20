@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -24,14 +25,13 @@ func (o *OzonMarketplace) GetName() string {
 	return "OZON"
 }
 
-// ИДЕАЛЬНАЯ СТРУКТУРА ПОД ТВОЙ XML
 type YandexXMLResponse struct {
 	XMLName xml.Name `xml:"yandexsearch"`
 	Docs    []struct {
 		URL      string   `xml:"url"`
 		Title    string   `xml:"title"`
 		Passages []string `xml:"passages>passage"`
-		Price    float64  `xml:"price"` // Яндекс сам отдает цену!
+		Price    float64  `xml:"price"`
 	} `xml:"response>results>grouping>group>doc"`
 }
 
@@ -59,7 +59,7 @@ func (o *OzonMarketplace) Search(ctx context.Context, query string, limit int) (
 
 	var riverData YandexXMLResponse
 	if err := xml.Unmarshal(body, &riverData); err != nil {
-		log.Printf("[OZON] Failed to parse XML. Error: %v\nBody: %s", err, string(body)[:min(len(body), 500)])
+		log.Printf("[OZON] XML Parse Error: %v", err)
 		return nil, err
 	}
 
@@ -71,7 +71,6 @@ func (o *OzonMarketplace) Search(ctx context.Context, query string, limit int) (
 			break
 		}
 
-		// Озон ссылки
 		linkPattern := regexp.MustCompile(`(?i)ozon\.ru/product/([^"/]+-[0-9]+)`)
 		linkMatch := linkPattern.FindStringSubmatch(doc.URL)
 		if len(linkMatch) < 2 {
@@ -84,25 +83,33 @@ func (o *OzonMarketplace) Search(ctx context.Context, query string, limit int) (
 		}
 		seen[idMatch] = true
 
-		// 1. Берем цену прямо из Яндекса!
 		price := doc.Price
-
-		// 2. Если Яндекс не нашел тег price, ищем в тексте
 		if price == 0 {
-			textToSearch := doc.Title + " " + strings.Join(doc.Passages, " ")
-			pricePattern := regexp.MustCompile(`(?:от\s*)?([0-9\s\x{00A0}]+)(?:₽|руб)`)
-			if pMatch := pricePattern.FindStringSubmatch(textToSearch); len(pMatch) > 1 {
-				price = extractPrice(pMatch[1])
-			}
-			if price == 0 {
-				fallbackPattern := regexp.MustCompile(`([0-9]{1,3}(?:\s[0-9]{3})+)\s*₽`)
-				if fbMatch := fallbackPattern.FindStringSubmatch(textToSearch); len(fbMatch) > 1 {
-					price = extractPrice(fbMatch[1])
-				}
+			textToSearch := strings.ReplaceAll(doc.Title+" "+strings.Join(doc.Passages, " "), "&nbsp;", "")
+			re := regexp.MustCompile(`([0-9\s]{3,10})\s*(?:₽|руб|р\.)`)
+			if matches := re.FindAllStringSubmatch(textToSearch, -1); len(matches) > 0 {
+				cleanNum := regexp.MustCompile(`\D`).ReplaceAllString(matches[0][1], "")
+				price, _ = strconv.ParseFloat(cleanNum, 64)
 			}
 		}
 
 		cleanTitle := regexp.MustCompile(`<[^>]*>`).ReplaceAllString(doc.Title, "")
+
+		// Если Яндекс не отдал Title, достаем его из ссылки
+		if cleanTitle == "" || len(cleanTitle) < 3 {
+			urlParts := strings.Split(doc.URL, "/")
+			for _, part := range urlParts {
+				if strings.Contains(part, "-") && len(part) > 10 {
+					cleanTitle = strings.ReplaceAll(part, "-", " ")
+					cleanTitle = regexp.MustCompile(`\s[0-9]+$`).ReplaceAllString(cleanTitle, "")
+					break
+				}
+			}
+		}
+
+		if cleanTitle == "" {
+			cleanTitle = "Товар Ozon"
+		}
 
 		products = append(products, Product{
 			ID: idMatch, Name: cleanString(cleanTitle), Price: price,
