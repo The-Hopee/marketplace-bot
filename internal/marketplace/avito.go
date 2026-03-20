@@ -29,7 +29,7 @@ func (a *AvitoMarketplace) Search(ctx context.Context, query string, limit int) 
 		return nil, fmt.Errorf("XMLRiver URL is empty")
 	}
 
-	yandexQuery := fmt.Sprintf("%s купить site:avito.ru", query)
+	yandexQuery := fmt.Sprintf("%s site:avito.ru -inurl:all -inurl:q=", query)
 	apiURL := fmt.Sprintf("%s&query=%s", a.XMLRiverURL, url.QueryEscape(yandexQuery))
 
 	log.Printf("[AVITO] Sending request to XMLRiver: %s", apiURL)
@@ -60,7 +60,7 @@ func (a *AvitoMarketplace) Search(ctx context.Context, query string, limit int) 
 			break
 		}
 
-		linkPattern := regexp.MustCompile(`avito\.ru/[^"]+_([0-9]{8,})`)
+		linkPattern := regexp.MustCompile(`(?i)avito\.ru/.*?_([0-9]{8,})`)
 		linkMatch := linkPattern.FindStringSubmatch(doc.URL)
 		if len(linkMatch) < 2 {
 			continue

@@ -72,7 +72,7 @@ func (o *OzonMarketplace) Search(ctx context.Context, query string, limit int) (
 		}
 
 		// Озон ссылки
-		linkPattern := regexp.MustCompile(`ozon\.ru/product/([^"/]+-[0-9]+)`)
+		linkPattern := regexp.MustCompile(`(?i)ozon\.ru/product/([^"/]+-[0-9]+)`)
 		linkMatch := linkPattern.FindStringSubmatch(doc.URL)
 		if len(linkMatch) < 2 {
 			continue
