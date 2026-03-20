@@ -55,7 +55,7 @@ func Load() (*Config, error) {
 		WebhookURL:           os.Getenv("WEBHOOK_URL"),
 		ServerPort:           getEnv("SERVER_PORT", "8080"),
 		AdminTelegramID:      ID,
-		XMLRiverURL:          os.Getenv("XMLRiverURL"),
+		XMLRiverURL:          os.Getenv("XMLRIVER_URL"),
 		OpenAIKey:            os.Getenv("OPENAI_KEY"),
 		OpenAIBaseURL:        aiBaseURL,
 	}, nil
