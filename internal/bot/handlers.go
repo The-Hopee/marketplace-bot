@@ -201,21 +201,24 @@ func (h *Handler) handleStart(ctx context.Context, message *tgbotapi.Message) {
 		}
 	}
 
+	// Новый красивый текст приветствия
 	text := fmt.Sprintf(`👋 Привет, %s!
 
-🛒 Я бот для поиска товаров на Wildberries
+🛒 Я бот для умного поиска товаров на *Wildberries*, *Ozon* и *Avito*.
 
 📦 Что я умею:
 • 🔍 Искать товары по названию
-• 📷 Искать по фотографии
-• 📊 Анализировать цены и скидки
-• 🏆 Рекомендовать лучшие товары
+• 📷 Искать похожие товары по фотографии
+• 📊 Сравнивать цены и находить максимальные скидки
+• 🤖 Выбирать лучшее с помощью AI-Агента
 
-🎁 У вас есть 5 бесплатных поисков!
+🎁 *У вас есть 5 бесплатных поисков каждый день!*
+_(Лимиты сбрасываются каждую ночь)_
 
 Используйте кнопки меню 👇`, message.From.FirstName)
 
 	msg := tgbotapi.NewMessage(message.Chat.ID, text)
+	msg.ParseMode = "Markdown" // Включили Markdown для выделения жирным и курсивом
 	msg.ReplyMarkup = MainMenuKeyboard()
 	h.bot.Send(msg)
 }
@@ -671,65 +674,60 @@ func (h *Handler) handlePopularSearches(ctx context.Context, message *tgbotapi.M
 
 func (h *Handler) handleSubscription(ctx context.Context, message *tgbotapi.Message) {
 	userID := message.From.ID
-
 	user, err := h.repo.GetUserByTelegramID(ctx, userID)
 	if err != nil {
-		log.Printf("ERROR [subscription] GetUser telegram_id=%d: %v", userID, err)
-		msg := tgbotapi.NewMessage(message.Chat.ID, "❌ Ошибка")
-		h.bot.Send(msg)
 		return
 	}
 
+	// Берем актуальные цены из конфига (переводим из копеек в рубли)
+	premPrice := float64(h.cfg.SubscriptionPrice) / 100
+	proPrice := float64(h.cfg.ProSubscriptionPrice) / 100
+
+	// Формируем статус юзера
+	subStatus := "❌ Статус: *Не активна*\n"
 	if user.HasActiveSubscription() {
-		var subInfo string
-		if user.SubscriptionEnd != nil {
-			subInfo = fmt.Sprintf("📅 Активна до: %s", user.SubscriptionEnd.Format("02.01.2006"))
-		} else {
-			subInfo = "♾️ Навсегда"
+		tierName := "Premium 💎"
+		if user.GetTier() == "pro" {
+			tierName = "PRO 👑"
 		}
 
-		text := fmt.Sprintf(`💎 *Ваша подписка*
-  
-  ✅ Статус: *Активна*
-  %s
-  
-  📊 *Статистика:*
-  🔍 Поисков выполнено: %d
-  🆓 Лимит: безлимитный`, subInfo, user.SearchCount)
-
-		msg := tgbotapi.NewMessage(message.Chat.ID, text)
-		msg.ParseMode = "Markdown"
-		msg.ReplyMarkup = MainMenuKeyboard()
-		h.bot.Send(msg)
-		return
-	}
-
-	// Нет подписки — предлагаем оплату
-	paymentInfo, err := h.subService.CreateSubscriptionPayment(ctx, userID, message.From.UserName)
-	if err != nil {
-		log.Printf("ERROR [subscription] CreatePayment telegram_id=%d: %v", userID, err)
-		msg := tgbotapi.NewMessage(message.Chat.ID, "❌ Ошибка создания платежа")
-		h.bot.Send(msg)
-		return
+		endDate := "♾️ Навсегда"
+		if user.SubscriptionEnd != nil {
+			endDate = user.SubscriptionEnd.Format("02.01.2006")
+		}
+		subStatus = fmt.Sprintf("✅ Статус: *Активна* (%s)\n📅 До: %s\n", tierName, endDate)
 	}
 
 	text := fmt.Sprintf(`💎 *Подписка MarketBot*
-  
-  ❌ Статус: *Не активна*
-  🆓 Бесплатных поисков: %d
-  
-  💰 %.0f руб/месяц
-  
-  ✅ Безлимитный поиск
-  ✅ Поиск по фото
-  ✅ Анализ цен
-  ✅ Рекомендации
-  
-  Нажмите кнопку для оплаты 👇`, user.FreeSearchesLeft, float64(paymentInfo.Amount)/100)
+
+%s
+📊 Поисков выполнено: %d
+
+*Действующие тарифы:*
+💎 *Premium* — %.0f руб/мес
+✅ Безлимитный поиск
+✅ Поиск по фото (WB + Ozon + Avito)
+
+👑 *PRO* — %.0f руб/мес
+✅ Всё из Premium
+✅ AI-Аналитика товаров (GPT-4o)
+✅ Определение Б/У или Новое
+
+👇 Выберите тариф для оформления:`, subStatus, user.SearchCount, premPrice, proPrice)
 
 	msg := tgbotapi.NewMessage(message.Chat.ID, text)
 	msg.ParseMode = "Markdown"
-	msg.ReplyMarkup = SubscriptionKeyboard(paymentInfo.PaymentURL)
+
+	// Создаем кнопки для выбора
+	keyboard := tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData(fmt.Sprintf("Купить Premium (%.0f₽)", premPrice), "buy_premium"),
+		),
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData(fmt.Sprintf("Купить PRO (%.0f₽)", proPrice), "buy_pro"),
+		),
+	)
+	msg.ReplyMarkup = keyboard
 	h.bot.Send(msg)
 }
 
@@ -913,25 +911,58 @@ func (h *Handler) handleHelp(message *tgbotapi.Message) {
 
 func (h *Handler) handleCallback(callback *tgbotapi.CallbackQuery) {
 	ctx := context.Background()
+	userID := callback.From.ID
 
 	switch callback.Data {
 	case "check_payment":
 		h.handleCheckPayment(ctx, callback)
+
 	case "new_search":
 		h.userStates[callback.From.ID] = "waiting_search"
 		msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "🔍 Введите название товара:")
 		h.bot.Send(msg)
+
 	case "back_to_menu":
 		msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "📱 Меню")
 		msg.ReplyMarkup = MainMenuKeyboard()
 		h.bot.Send(msg)
+
 	case "set_city":
 		h.userStates[callback.From.ID] = "waiting_city"
 		msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "📍 Напишите название вашего города (например: Нижний Новгород):")
 		h.bot.Send(msg)
 		h.bot.Request(tgbotapi.NewCallback(callback.ID, ""))
+
+	case "buy_premium":
+		paymentInfo, err := h.subService.CreateSubscriptionPayment(ctx, userID, callback.From.UserName, "premium")
+		if err == nil {
+			msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "💎 Оплата тарифа *Premium*:")
+			msg.ParseMode = "Markdown"
+			msg.ReplyMarkup = SubscriptionKeyboard(paymentInfo.PaymentURL) // Твоя функция клавиатуры с кнопкой URL
+			h.bot.Send(msg)
+		} else {
+			log.Printf("[Handler] Error creating premium payment: %v", err)
+			msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "❌ Ошибка создания платежа. Попробуйте позже.")
+			h.bot.Send(msg)
+		}
+		h.bot.Request(tgbotapi.NewCallback(callback.ID, ""))
+
+	case "buy_pro":
+		paymentInfo, err := h.subService.CreateSubscriptionPayment(ctx, userID, callback.From.UserName, "pro")
+		if err == nil {
+			msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "👑 Оплата тарифа *PRO*:")
+			msg.ParseMode = "Markdown"
+			msg.ReplyMarkup = SubscriptionKeyboard(paymentInfo.PaymentURL)
+			h.bot.Send(msg)
+		} else {
+			log.Printf("[Handler] Error creating pro payment: %v", err)
+			msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "❌ Ошибка создания платежа. Попробуйте позже.")
+			h.bot.Send(msg)
+		}
+		h.bot.Request(tgbotapi.NewCallback(callback.ID, ""))
 	}
 
+	// Закрываем крутилку на кнопке в любом случае
 	h.bot.Request(tgbotapi.NewCallback(callback.ID, ""))
 }
 

@@ -6,6 +6,7 @@ import (
 	"marketplace-bot/internal/config"
 	"marketplace-bot/internal/database"
 	"marketplace-bot/internal/payment"
+	"strings"
 	"time"
 )
 
@@ -36,17 +37,28 @@ type PaymentInfo struct {
 	Amount     int64
 }
 
-func (s *Service) CreateSubscriptionPayment(ctx context.Context, telegramID int64, username string) (*PaymentInfo, error) {
+func (s *Service) CreateSubscriptionPayment(ctx context.Context, telegramID int64, username string, tier string) (*PaymentInfo, error) {
+	// Определяем цену в зависимости от выбранного тарифа
+	amount := s.cfg.SubscriptionPrice
+	if tier == "pro" {
+		amount = s.cfg.ProSubscriptionPrice
+	}
+
+	// Генерируем OrderID и вшиваем туда уровень подписки (чтобы потом прочитать его при подтверждении)
+	orderID := fmt.Sprintf("sub_%d_%d_%s", telegramID, time.Now().Unix(), tier)
+
 	// Создаем платеж в T-Bank
 	userData := map[string]string{
 		"TelegramID": fmt.Sprintf("%d", telegramID),
 		"Username":   username,
+		"Tier":       tier,
 	}
 
 	initResp, err := s.tbank.InitPayment(
 		ctx,
-		s.cfg.SubscriptionPrice,
-		"Подписка на MarketBot (1 месяц)",
+		orderID, // Передаем сгенерированный OrderID
+		amount,  // Передаем правильную цену (premium или pro)
+		fmt.Sprintf("Подписка на MarketBot (%s)", strings.ToUpper(tier)),
 		userData,
 	)
 	if err != nil {
@@ -85,8 +97,14 @@ func (s *Service) ConfirmPayment(ctx context.Context, orderID, paymentID string)
 		return 0, err
 	}
 
-	// Продлеваем подписку (добавили "premium")
-	if err := s.repo.ExtendSubscription(ctx, paymentRecord.TelegramID, s.cfg.SubscriptionDays, "premium"); err != nil {
+	// Читаем тариф из конца номера заказа (например: sub_12345_173000000_pro)
+	tier := "premium" // по умолчанию
+	if strings.HasSuffix(orderID, "_pro") {
+		tier = "pro"
+	}
+
+	// Продлеваем подписку, выдавая правильный уровень
+	if err := s.repo.ExtendSubscription(ctx, paymentRecord.TelegramID, s.cfg.SubscriptionDays, tier); err != nil {
 		return 0, err
 	}
 

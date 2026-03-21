@@ -87,6 +87,7 @@ type NotificationRequest struct {
 
 func (c *TBankClient) InitPayment(
 	ctx context.Context,
+	orderID string, // ДОБАВИЛИ СЮДА
 	amount int64,
 	description string,
 	userData map[string]string,
@@ -102,8 +103,6 @@ func (c *TBankClient) InitPayment(
 	if amount <= 0 {
 		return nil, fmt.Errorf("amount must be > 0, got %d", amount)
 	}
-
-	orderID := fmt.Sprintf("sub_%d", time.Now().UnixNano())
 
 	// Параметры для токена:
 	// ВСЕ отправляемые плоские поля + Password, КРОМЕ Token и DATA
