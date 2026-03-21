@@ -811,75 +811,6 @@ func (h *Handler) handleReferral(ctx context.Context, message *tgbotapi.Message)
 
 	canUse, daysLeft, err := h.referralSvc.CanUseReferral(ctx, userID)
 	if err != nil {
-		h.bot.Send(tgbotapi.NewMessage(message.Chat.ID, "❌ Ошибка"))
-		return
-	}
-
-	// Если это НЕ админ и нужно еще подождать — показываем заглушку
-	if !isAdmin && daysLeft > 0 {
-		text := fmt.Sprintf("⏳ Реферальная программа откроется через %d дн.\n\n"+
-			"Пользуйтесь ботом, и скоро вы сможете приглашать друзей!", daysLeft)
-		h.bot.Send(tgbotapi.NewMessage(message.Chat.ID, text))
-		return
-	}
-
-	link := h.referralSvc.GetReferralLink(userID)
-	total, searchBonuses, _ := h.referralSvc.GetStats(ctx, userID)
-
-	slotsLeft := service.ReferralMaxInvites - total
-	if slotsLeft < 0 {
-		slotsLeft = 0
-	}
-
-	// Для админа показываем бесконечное количество слотов
-	if isAdmin {
-		slotsLeft = 9999
-	}
-
-	limitText := ""
-	if !isAdmin && !canUse && daysLeft == 0 {
-		limitText = "\n\n⚠️ Лимит приглашений исчерпан"
-	}
-
-	maxInvites := service.ReferralMaxInvites
-	if isAdmin {
-		maxInvites = 9999 // Визуально показываем админу, что у него безлимит
-	}
-
-	text := fmt.Sprintf(`👥 *Реферальная программа*
-
-🔗 Ваша ссылка:
-%s
-
-📊 *Статистика:*
-👤 Приглашено: %d/%d
-🎯 Активных (20+ поисков): %d
-📭 Осталось слотов: %d
-
-💎 *Бонусы:*
-• +%d дней вам и другу за регистрацию
-• +%d дней вам и другу за 20 поисков%s`,
-		link, total, maxInvites, searchBonuses, slotsLeft,
-		service.ReferralBonusDays, service.ReferralBonusDays, limitText)
-
-	m := tgbotapi.NewMessage(message.Chat.ID, text)
-	m.ParseMode = "Markdown"
-	h.bot.Send(m)
-}
-
-// ==================== 👥 Рефералы ====================
-
-func (h *Handler) handleReferral(ctx context.Context, message *tgbotapi.Message) {
-	userID := message.From.ID
-
-	// Проверяем, является ли пользователь админом
-	isAdmin := false
-	if userID == h.cfg.AdminTelegramID {
-		isAdmin = true
-	}
-
-	canUse, daysLeft, err := h.referralSvc.CanUseReferral(ctx, userID)
-	if err != nil {
 		h.bot.Send(tgbotapi.NewMessage(message.Chat.ID, "❌ Ошибка загрузки рефералов"))
 		return
 	}
@@ -943,6 +874,45 @@ func (h *Handler) handleReferral(ctx context.Context, message *tgbotapi.Message)
 	if err != nil {
 		log.Printf("[Referral] CRITICAL Error sending message: %v", err)
 	}
+}
+
+// ==================== 👤 Профиль ====================
+
+func (h *Handler) handleProfile(ctx context.Context, message *tgbotapi.Message) {
+	userID := message.From.ID
+	user, err := h.repo.GetUserByTelegramID(ctx, userID)
+	if err != nil {
+		return
+	}
+
+	subStatus := fmt.Sprintf("❌ Нет (осталось %d поисков)", user.FreeSearchesLeft)
+	if user.HasActiveSubscription() {
+		subStatus = "✅ " + user.GetTier()
+	}
+
+	cityText := "Не указан (Поиск по всей РФ)"
+	if user.City != "" {
+		cityText = user.City
+	}
+
+	text := fmt.Sprintf(`👤 *Ваш Профиль*
+
+Имя: %s %s
+Поисков выполнено: %d
+Подписка: %s
+📍 *Ваш город:* %s`, user.FirstName, user.LastName, user.SearchCount, subStatus, cityText)
+
+	msg := tgbotapi.NewMessage(message.Chat.ID, text)
+	msg.ParseMode = "Markdown"
+
+	// Добавляем инлайн-кнопку для изменения города
+	keyboard := tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("📍 Установить мой город", "set_city"),
+		),
+	)
+	msg.ReplyMarkup = keyboard
+	h.bot.Send(msg)
 }
 
 // ==================== ❓ Помощь ====================
