@@ -801,31 +801,51 @@ func (h *Handler) applyPromo(ctx context.Context, message *tgbotapi.Message) {
 // ==================== 👥 Рефералы ====================
 
 func (h *Handler) handleReferral(ctx context.Context, message *tgbotapi.Message) {
-	canUse, daysLeft, err := h.referralSvc.CanUseReferral(ctx, message.From.ID)
+	userID := message.From.ID
+
+	// Проверяем, является ли пользователь админом
+	isAdmin := false
+	if userID == h.cfg.AdminTelegramID {
+		isAdmin = true
+	}
+
+	canUse, daysLeft, err := h.referralSvc.CanUseReferral(ctx, userID)
 	if err != nil {
 		h.bot.Send(tgbotapi.NewMessage(message.Chat.ID, "❌ Ошибка"))
 		return
 	}
 
-	if daysLeft > 0 {
+	// Если это НЕ админ и нужно еще подождать — показываем заглушку
+	if !isAdmin && daysLeft > 0 {
 		text := fmt.Sprintf("⏳ Реферальная программа откроется через %d дн.\n\n"+
 			"Пользуйтесь ботом, и скоро вы сможете приглашать друзей!", daysLeft)
 		h.bot.Send(tgbotapi.NewMessage(message.Chat.ID, text))
 		return
 	}
 
-	link := h.referralSvc.GetReferralLink(message.From.ID)
-	total, searchBonuses, _ := h.referralSvc.GetStats(ctx, message.From.ID)
+	link := h.referralSvc.GetReferralLink(userID)
+	total, searchBonuses, _ := h.referralSvc.GetStats(ctx, userID)
 
 	slotsLeft := service.ReferralMaxInvites - total
 	if slotsLeft < 0 {
 		slotsLeft = 0
 	}
 
+	// Для админа показываем бесконечное количество слотов
+	if isAdmin {
+		slotsLeft = 9999
+	}
+
 	limitText := ""
-	if !canUse && daysLeft == 0 {
+	if !isAdmin && !canUse && daysLeft == 0 {
 		limitText = "\n\n⚠️ Лимит приглашений исчерпан"
 	}
+
+	maxInvites := service.ReferralMaxInvites
+	if isAdmin {
+		maxInvites = 9999 // Визуально показываем админу, что у него безлимит
+	}
+
 	text := fmt.Sprintf(`👥 *Реферальная программа*
 
 🔗 Ваша ссылка:
@@ -839,7 +859,7 @@ func (h *Handler) handleReferral(ctx context.Context, message *tgbotapi.Message)
 💎 *Бонусы:*
 • +%d дней вам и другу за регистрацию
 • +%d дней вам и другу за 20 поисков%s`,
-		link, total, service.ReferralMaxInvites, searchBonuses, slotsLeft,
+		link, total, maxInvites, searchBonuses, slotsLeft,
 		service.ReferralBonusDays, service.ReferralBonusDays, limitText)
 
 	m := tgbotapi.NewMessage(message.Chat.ID, text)
