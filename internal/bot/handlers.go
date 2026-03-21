@@ -471,14 +471,15 @@ func (h *Handler) sendSearchResultsWithAnalysis(chatID int64, query string, resu
 
 func (h *Handler) handleImageSearchStart(message *tgbotapi.Message) {
 	h.userStates[message.From.ID] = "waiting_image"
-	msg := tgbotapi.NewMessage(message.Chat.ID, `📷 Отправьте фото товара
+	msg := tgbotapi.NewMessage(message.Chat.ID, `📷 *Отправьте фото товара*
 
-Я распознаю товар и найду его на Wildberries.
+Я распознаю товар по картинке и найду его на *Wildberries*, *Ozon* и *Avito*.
 
-💡 Советы:
+💡 *Советы:*
 • Фото должно быть чётким
 • Товар должен быть хорошо виден
-• Лучше фотографировать на светлом фоне`)
+• Лучше фотографировать на светлом фоне (или отправлять картинку как файл)`)
+	msg.ParseMode = "Markdown"
 	h.bot.Send(msg)
 }
 

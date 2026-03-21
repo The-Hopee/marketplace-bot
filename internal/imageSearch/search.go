@@ -75,34 +75,23 @@ func (s *ImageSearcher) parseProducts(html string) []marketplace.Product {
 	// === WILDBERRIES ===
 	wbProducts := s.parseWildberries(html, seen)
 	products = append(products, wbProducts...)
+	log.Printf("[ImageSearch] WB products: %d", len(wbProducts))
 
 	// === OZON ===
 	ozonProducts := s.parseOzon(html, seen)
 	products = append(products, ozonProducts...)
+	log.Printf("[ImageSearch] OZON products: %d", len(ozonProducts))
 
-	// === AVITO (НОВОЕ) ===
-	avitoPattern := regexp.MustCompile(`href="(https?://(?:www\.)?avito\.ru/[^"]+)"[^>]*aria-label="([^"]+)"`)
-	avitoMatches := avitoPattern.FindAllStringSubmatch(html, 10)
-	for _, match := range avitoMatches {
-		if len(match) >= 3 {
-			url := match[1]
-			title := match[2]
-			// Генерируем фейковый ID из конца URL
-			idParts := strings.Split(url, "_")
-			id := idParts[len(idParts)-1]
+	// === AVITO ===
+	avitoProducts := s.parseAvito(html, seen)
+	products = append(products, avitoProducts...)
+	log.Printf("[ImageSearch] AVITO products: %d", len(avitoProducts))
 
-			if !seen["avito_"+id] {
-				seen["avito_"+id] = true
-				products = append(products, marketplace.Product{
-					ID: id, Name: truncate(title, 50), URL: url, Marketplace: "Avito", Condition: "Б/У",
-				})
-			}
-		}
-	}
-
+	// Ограничиваем количество
 	if len(products) > 20 {
 		products = products[:20]
 	}
+
 	return products
 }
 
@@ -249,6 +238,69 @@ func (s *ImageSearcher) parseOzon(html string, seen map[string]bool) []marketpla
 	return products
 }
 
+func (s *ImageSearcher) parseAvito(html string, seen map[string]bool) []marketplace.Product {
+	var products []marketplace.Product
+
+	// Паттерн 1: href потом aria-label (как у ВБ)
+	pattern1 := regexp.MustCompile(`(?is)href="(https?://(?:www\.)?avito\.ru/[^"]+_([0-9]{8,}))"[^>]*aria-label="([^"]+)"`)
+	matches1 := pattern1.FindAllStringSubmatch(html, 30)
+
+	for _, match := range matches1 {
+		if len(match) >= 4 {
+			productURL := match[1]
+			productID := match[2]
+			ariaLabel := match[3]
+
+			key := "avito_" + productID
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+
+			product := parseAriaLabel(ariaLabel, productID, productURL, "Avito")
+			if product != nil {
+				product.Condition = "Б/У" // Для Авито по умолчанию
+				products = append(products, *product)
+			}
+		}
+	}
+
+	// Паттерн 2: Просто ссылки на Авито
+	if len(products) == 0 {
+		pattern2 := regexp.MustCompile(`(?i)href="(https?://(?:www\.)?avito\.ru/[^"]+_([0-9]{8,}))"`)
+		matches2 := pattern2.FindAllStringSubmatch(html, 20)
+
+		for _, match := range matches2 {
+			if len(match) >= 3 {
+				productURL := match[1]
+				productID := match[2]
+
+				key := "avito_" + productID
+				if seen[key] {
+					continue
+				}
+				seen[key] = true
+
+				name := findNearbyText(html, productID)
+				if name == "" {
+					name = "Товар Авито " + productID
+				}
+
+				products = append(products, marketplace.Product{
+					ID:          productID,
+					Name:        name,
+					URL:         productURL,
+					Marketplace: "Avito",
+					Condition:   "Б/У",
+					InStock:     true,
+				})
+			}
+		}
+	}
+
+	return products
+}
+
 func parseAriaLabel(ariaLabel, productID, productURL, marketplaceName string) *marketplace.Product {
 	product := &marketplace.Product{
 		ID:          productID,
@@ -266,10 +318,16 @@ func parseAriaLabel(ariaLabel, productID, productURL, marketplaceName string) *m
 		product.Name = strings.TrimSpace(parts[0])
 	}
 
-	// Цена
+	// Цена (Ищем слово "Цена" и цифры после него)
 	pricePattern := regexp.MustCompile(`Цена\s*([\d\s]+)₽`)
 	if match := pricePattern.FindStringSubmatch(ariaLabel); len(match) > 1 {
 		product.Price = parsePrice(match[1])
+	} else {
+		// Резервный поиск цены (если слова "Цена" нет, но есть цифры с ₽)
+		fallbackPattern := regexp.MustCompile(`([0-9\s]{3,10})\s*₽`)
+		if match := fallbackPattern.FindStringSubmatch(ariaLabel); len(match) > 1 {
+			product.Price = parsePrice(match[1])
+		}
 	}
 
 	// Старая цена
