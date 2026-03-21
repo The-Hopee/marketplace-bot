@@ -25,12 +25,18 @@ func (a *AvitoMarketplace) GetName() string {
 	return "Avito"
 }
 
-func (a *AvitoMarketplace) Search(ctx context.Context, query string, limit int) (*SearchResult, error) {
+func (a *AvitoMarketplace) Search(ctx context.Context, query string, limit int, city string) (*SearchResult, error) {
 	if a.XMLRiverURL == "" {
 		return nil, fmt.Errorf("XMLRiver URL is empty")
 	}
 
-	yandexQuery := fmt.Sprintf("%s купить site:avito.ru", query)
+	cityPart := ""
+	if city != "" {
+		cityPart = city + " "
+	}
+
+	// Яндекс поставит совпадения с городом на первые места!
+	yandexQuery := fmt.Sprintf("%s %sкупить site:avito.ru -inurl:q= -inurl:all", query, cityPart)
 	apiURL := fmt.Sprintf("%s&query=%s", a.XMLRiverURL, url.QueryEscape(yandexQuery))
 
 	log.Printf("[AVITO] Sending request to XMLRiver: %s", apiURL)

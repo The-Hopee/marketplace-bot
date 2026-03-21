@@ -35,7 +35,7 @@ type YandexXMLResponse struct {
 	} `xml:"response>results>grouping>group>doc"`
 }
 
-func (o *OzonMarketplace) Search(ctx context.Context, query string, limit int) (*SearchResult, error) {
+func (o *OzonMarketplace) Search(ctx context.Context, query string, limit int, city string) (*SearchResult, error) {
 	if o.XMLRiverURL == "" {
 		return nil, fmt.Errorf("XMLRiver URL is empty")
 	}

@@ -113,6 +113,14 @@ func (h *Handler) handleMessage(message *tgbotapi.Message) {
 		case "waiting_promo":
 			h.applyPromo(ctx, message)
 			return
+		case "waiting_city":
+			city := strings.TrimSpace(message.Text)
+			h.repo.UpdateUserCity(ctx, userID, city)
+			delete(h.userStates, userID)
+			msg := tgbotapi.NewMessage(message.Chat.ID, fmt.Sprintf("✅ Ваш город установлен: *%s*\nТеперь Avito будет искать товары рядом с вами!", city))
+			msg.ParseMode = "Markdown"
+			h.bot.Send(msg)
+			return
 		}
 	}
 
@@ -283,11 +291,12 @@ func (h *Handler) handleSearchQuery(ctx context.Context, message *tgbotapi.Messa
 }
 
 func (h *Handler) performSearch(ctx context.Context, chatID int64, userID int64, query string, msgIDToDelete int) {
-	// Получаем юзера, чтобы узнать уровень подписки
 	user, err := h.repo.GetUserByTelegramID(ctx, userID)
 	tier := "free"
-	if err == nil && user != nil && user.HasActiveSubscription() {
-		tier = user.SubscriptionTier
+	userCity := "" // По умолчанию пусто
+	if err == nil && user != nil {
+		tier = user.GetTier()
+		userCity = user.City // Берем город юзера!
 	}
 
 	var results *marketplace.AggregatedResult
@@ -305,7 +314,7 @@ func (h *Handler) performSearch(ctx context.Context, chatID int64, userID int64,
 
 	if results == nil {
 		// ПЕРЕДАЕМ TIER В АГРЕГАТОР (запускает нужные маркетплейсы)
-		results = h.aggregator.Search(ctx, query, 10, tier)
+		results = h.aggregator.Search(ctx, query, 10, tier, userCity)
 
 		if h.cache != nil && results.TotalCount > 0 {
 			h.cache.SetSearchResults(ctx, query, results)
@@ -367,79 +376,61 @@ func (h *Handler) performSearch(ctx context.Context, chatID int64, userID int64,
 func (h *Handler) sendSearchResultsWithAnalysis(chatID int64, query string, results *marketplace.AggregatedResult, analysis *analysis.AnalysisResult, fromCache bool) {
 	var sb strings.Builder
 
-	sb.WriteString(fmt.Sprintf("🔍 %s\n", sanitizeString(query)))
-
+	sb.WriteString(fmt.Sprintf("🔍 *%s*\n", sanitizeString(query)))
 	if fromCache {
-		sb.WriteString("⚡️ Быстрый результат\n")
+		sb.WriteString("⚡️ Быстрый результат из кэша\n")
 	}
 	sb.WriteString("\n")
 
-	if analysis.BestOverall != nil {
-		sb.WriteString("🏆 ЛУЧШИЙ ВЫБОР:\n")
-		best := analysis.BestOverall
-		name := truncateUTF8(sanitizeString(best.Name), 45)
-
-		mpEmoji := "📦"
-		if best.Marketplace == "OZON" {
-			mpEmoji = "🔵"
-		} else if best.Marketplace == "Wildberries" {
-			mpEmoji = "🟣"
-		}
-
-		sb.WriteString(fmt.Sprintf("%s %s\n", mpEmoji, name))
-		sb.WriteString(fmt.Sprintf("💰 %.0f руб.", best.Price))
-		if best.Discount > 0 {
-			sb.WriteString(fmt.Sprintf(" (-%d%%)", best.Discount))
-		}
-		sb.WriteString(fmt.Sprintf(" — %s\n", best.Reason))
-		sb.WriteString(fmt.Sprintf("%s\n\n", best.URL))
-	}
-
-	sb.WriteString("📊 НАЙДЕНО:\n")
+	sb.WriteString("📊 *НАЙДЕНО ТОВАРОВ:*\n")
 	for mpName, products := range results.Results {
 		mpEmoji := "📦"
 		if mpName == "OZON" {
 			mpEmoji = "🔵"
 		} else if mpName == "Wildberries" {
 			mpEmoji = "🟣"
+		} else if mpName == "Avito" {
+			mpEmoji = "🟢"
 		}
-		sb.WriteString(fmt.Sprintf("%s %s: %d товаров\n", mpEmoji, mpName, len(products)))
+		sb.WriteString(fmt.Sprintf("%s %s: %d шт.\n", mpEmoji, mpName, len(products)))
 	}
 	sb.WriteString("\n")
 
-	sb.WriteString("💰 ЦЕНЫ:\n")
-	sb.WriteString(fmt.Sprintf("• Мин: %.0f руб.\n", analysis.PriceStats.MinPrice))
-	sb.WriteString(fmt.Sprintf("• Макс: %.0f руб.\n", analysis.PriceStats.MaxPrice))
-	sb.WriteString(fmt.Sprintf("• Средняя: %.0f руб.\n", analysis.PriceStats.AvgPrice))
-	if analysis.PriceStats.AvgDiscount > 0 {
-		sb.WriteString(fmt.Sprintf("• Ср. скидка: %.0f%%\n", analysis.PriceStats.AvgDiscount))
-	}
-	sb.WriteString("\n")
-
-	showCount := len(analysis.TopProducts)
-	if showCount > 6 {
-		showCount = 6
-	}
-
-	sb.WriteString(fmt.Sprintf("📦 ТОП-%d:\n\n", showCount))
-
-	for i := 0; i < showCount; i++ {
-		p := analysis.TopProducts[i]
+	// ВЫВОДИМ ЛУЧШИХ ПО ПЛОЩАДКАМ
+	sb.WriteString("🥇 *ЛУЧШИЕ ПО ПЛОЩАДКАМ:*\n\n")
+	for mpName, best := range analysis.BestByMarketplace {
 		mpEmoji := "📦"
-		if p.Marketplace == "OZON" {
+		if mpName == "OZON" {
 			mpEmoji = "🔵"
-		} else if p.Marketplace == "Wildberries" {
+		} else if mpName == "Wildberries" {
 			mpEmoji = "🟣"
+		} else if mpName == "Avito" {
+			mpEmoji = "🟢"
 		}
 
-		name := truncateUTF8(sanitizeString(p.Name), 38)
-		sb.WriteString(fmt.Sprintf("%d. %s %s\n", i+1, mpEmoji, name))
-		sb.WriteString(fmt.Sprintf("   💰 %.0f руб.", p.Price))
-		if p.Discount > 0 {
-			sb.WriteString(fmt.Sprintf(" -%d%%", p.Discount))
+		name := truncateUTF8(sanitizeString(best.Name), 40)
+		sb.WriteString(fmt.Sprintf("%s *%s*\n%s\n", mpEmoji, mpName, name))
+		if best.Price > 0 {
+			sb.WriteString(fmt.Sprintf("💰 %.0f руб.", best.Price))
+			if best.Discount > 0 {
+				sb.WriteString(fmt.Sprintf(" (-%d%%)", best.Discount))
+			}
+			sb.WriteString("\n")
+		} else {
+			sb.WriteString("💰 Цена по запросу на сайте\n")
 		}
-		sb.WriteString(fmt.Sprintf(" (скор: %.0f)\n", p.Score))
-		sb.WriteString(fmt.Sprintf("   %s\n\n", p.URL))
+		if best.Condition != "" {
+			sb.WriteString(fmt.Sprintf("⚠️ Состояние: %s\n", best.Condition))
+		}
+		sb.WriteString(fmt.Sprintf("🔗 [Перейти к товару](%s)\n\n", best.URL))
+	}
+
+	// ВЫВОДИМ АБСОЛЮТНОГО ПОБЕДИТЕЛЯ
+	if analysis.BestOverall != nil {
+		sb.WriteString("🏆 *АБСОЛЮТНО ЛУЧШИЙ ВЫБОР:*\n")
+		best := analysis.BestOverall
+		name := truncateUTF8(sanitizeString(best.Name), 45)
+		sb.WriteString(fmt.Sprintf("%s\n💰 %.0f руб. — %s\n🔗 [Смотреть](%s)\n\n", name, best.Price, best.Reason, best.URL))
 	}
 
 	text := sb.String()
@@ -448,6 +439,7 @@ func (h *Handler) sendSearchResultsWithAnalysis(chatID int64, query string, resu
 	}
 
 	msg := tgbotapi.NewMessage(chatID, text)
+	msg.ParseMode = "Markdown"
 	msg.DisableWebPagePreview = true
 	msg.ReplyMarkup = MainMenuKeyboard()
 
@@ -861,38 +853,38 @@ func (h *Handler) handleReferral(ctx context.Context, message *tgbotapi.Message)
 
 func (h *Handler) handleProfile(ctx context.Context, message *tgbotapi.Message) {
 	userID := message.From.ID
-
 	user, err := h.repo.GetUserByTelegramID(ctx, userID)
 	if err != nil {
-		msg := tgbotapi.NewMessage(message.Chat.ID, "❌ Ошибка")
-		h.bot.Send(msg)
 		return
 	}
 
-	var subStatus string
+	subStatus := fmt.Sprintf("❌ Нет (осталось %d поисков)", user.FreeSearchesLeft)
 	if user.HasActiveSubscription() {
-		subStatus = fmt.Sprintf("✅ До %s", user.SubscriptionEnd.Format("02.01.2006"))
-	} else {
-		subStatus = fmt.Sprintf("❌ Нет (осталось %d поисков)", user.FreeSearchesLeft)
+		subStatus = "✅ " + user.GetTier()
 	}
 
-	refTotal, refSearch, _ := h.referralSvc.GetStats(ctx, userID)
+	cityText := "Не указан (Поиск по всей РФ)"
+	if user.City != "" {
+		cityText = user.City
+	}
 
-	text := fmt.Sprintf(`👤 Профиль
+	text := fmt.Sprintf(`👤 *Ваш Профиль*
 
 Имя: %s %s
-Поисков: %d
+Поисков выполнено: %d
 Подписка: %s
-Приглашено друзей: %d/%d
-Активных (20+ поисков): %d`,
-		user.FirstName, user.LastName,
-		user.SearchCount,
-		subStatus,
-		refTotal, service.ReferralMaxInvites,
-		refSearch,
-	)
+📍 *Ваш город:* %s`, user.FirstName, user.LastName, user.SearchCount, subStatus, cityText)
 
 	msg := tgbotapi.NewMessage(message.Chat.ID, text)
+	msg.ParseMode = "Markdown"
+
+	// Добавляем инлайн-кнопку для изменения города
+	keyboard := tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("📍 Установить мой город", "set_city"),
+		),
+	)
+	msg.ReplyMarkup = keyboard
 	h.bot.Send(msg)
 }
 
@@ -933,6 +925,11 @@ func (h *Handler) handleCallback(callback *tgbotapi.CallbackQuery) {
 		msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "📱 Меню")
 		msg.ReplyMarkup = MainMenuKeyboard()
 		h.bot.Send(msg)
+	case "set_city":
+		h.userStates[callback.From.ID] = "waiting_city"
+		msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "📍 Напишите название вашего города (например: Нижний Новгород):")
+		h.bot.Send(msg)
+		h.bot.Request(tgbotapi.NewCallback(callback.ID, ""))
 	}
 
 	h.bot.Request(tgbotapi.NewCallback(callback.ID, ""))

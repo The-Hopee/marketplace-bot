@@ -9,14 +9,15 @@ import (
 )
 
 type AnalysisResult struct {
-	Query          string          `json:"query"`
-	TotalProducts  int             `json:"total_products"`
-	BestByPrice    *ScoredProduct  `json:"best_by_price"`
-	BestByDiscount *ScoredProduct  `json:"best_by_discount"`
-	BestOverall    *ScoredProduct  `json:"best_overall"`
-	PriceStats     PriceStats      `json:"price_stats"`
-	TopProducts    []ScoredProduct `json:"top_products"`
-	Recommendation string          `json:"recommendation"`
+	Query             string                    `json:"query"`
+	TotalProducts     int                       `json:"total_products"`
+	BestByPrice       *ScoredProduct            `json:"best_by_price"`
+	BestByDiscount    *ScoredProduct            `json:"best_by_discount"`
+	BestOverall       *ScoredProduct            `json:"best_overall"`
+	BestByMarketplace map[string]*ScoredProduct `json:"best_by_marketplace"` // НОВОЕ ПОЛЕ
+	PriceStats        PriceStats                `json:"price_stats"`
+	TopProducts       []ScoredProduct           `json:"top_products"`
+	Recommendation    string                    `json:"recommendation"`
 }
 
 type ScoredProduct struct {
@@ -39,13 +40,12 @@ func NewAnalyzer() *Analyzer {
 	return &Analyzer{}
 }
 
-// Анализ результатов поиска
 func (a *Analyzer) Analyze(results *marketplace.AggregatedResult) *AnalysisResult {
 	analysis := &AnalysisResult{
-		Query: results.Query,
+		Query:             results.Query,
+		BestByMarketplace: make(map[string]*ScoredProduct),
 	}
 
-	// Собираем все товары
 	var allProducts []marketplace.Product
 	for _, products := range results.Results {
 		allProducts = append(allProducts, products...)
@@ -57,34 +57,31 @@ func (a *Analyzer) Analyze(results *marketplace.AggregatedResult) *AnalysisResul
 	}
 
 	analysis.TotalProducts = len(allProducts)
-
-	// Считаем статистику цен
 	analysis.PriceStats = a.calculatePriceStats(allProducts)
-
-	// Скорим товары
 	scoredProducts := a.scoreProducts(allProducts, analysis.PriceStats)
 
-	// Сортируем по скору
 	sort.Slice(scoredProducts, func(i, j int) bool {
 		return scoredProducts[i].Score > scoredProducts[j].Score
 	})
 
-	// Лучший по общему скору
 	if len(scoredProducts) > 0 {
 		analysis.BestOverall = &scoredProducts[0]
 	}
 
-	// Лучший по цене
-	analysis.BestByPrice = a.findBestByPrice(scoredProducts)
+	// === ИЩЕМ ЛУЧШЕГО НА КАЖДОМ МАРКЕТПЛЕЙСЕ ===
+	for i := range scoredProducts {
+		sp := &scoredProducts[i]
+		currentBest, exists := analysis.BestByMarketplace[sp.Marketplace]
+		if !exists || sp.Score > currentBest.Score {
+			analysis.BestByMarketplace[sp.Marketplace] = sp
+		}
+	}
 
-	// Лучший по скидке
+	analysis.BestByPrice = a.findBestByPrice(scoredProducts)
 	analysis.BestByDiscount = a.findBestByDiscount(scoredProducts)
 
-	// Топ-5 товаров
 	topCount := min(5, len(scoredProducts))
 	analysis.TopProducts = scoredProducts[:topCount]
-
-	// Генерируем рекомендацию
 	analysis.Recommendation = a.generateRecommendation(analysis)
 
 	return analysis

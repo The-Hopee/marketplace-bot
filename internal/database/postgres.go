@@ -243,6 +243,8 @@ func (db *DB) Migrate(ctx context.Context) error {
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_image INT DEFAULT 0`,
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_search_date DATE`,
 		`ALTER TABLE promocodes ADD COLUMN IF NOT EXISTS tier VARCHAR(20) DEFAULT 'premium'`,
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_tier VARCHAR(20) DEFAULT 'free'`,
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS city VARCHAR(100) DEFAULT ''`,
 	}
 
 	for _, q := range queries {

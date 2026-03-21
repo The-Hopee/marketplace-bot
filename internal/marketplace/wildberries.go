@@ -29,7 +29,7 @@ func (w *WildberriesMarketplace) GetName() string {
 	return "Wildberries"
 }
 
-func (w *WildberriesMarketplace) Search(ctx context.Context, query string, limit int) (*SearchResult, error) {
+func (w *WildberriesMarketplace) Search(ctx context.Context, query string, limit int, city string) (*SearchResult, error) {
 	searchURL := fmt.Sprintf("https://www.wildberries.ru/catalog/0/search.aspx?search=%s", url.QueryEscape(query))
 
 	log.Printf("[WB] Loading page: %s", searchURL)

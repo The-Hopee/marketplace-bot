@@ -30,7 +30,7 @@ type AggregatedResult struct {
 }
 
 // Теперь мы передаем subscriptionTier, чтобы знать, какие парсеры включать
-func (a *Aggregator) Search(ctx context.Context, query string, limitPerMarketplace int, subscriptionTier string) *AggregatedResult {
+func (a *Aggregator) Search(ctx context.Context, query string, limitPerMarketplace int, subscriptionTier string, city string) *AggregatedResult {
 	result := &AggregatedResult{
 		Query:   query,
 		Results: make(map[string][]Product),
@@ -59,7 +59,7 @@ func (a *Aggregator) Search(ctx context.Context, query string, limitPerMarketpla
 			mpName := m.GetName()
 			log.Printf("[%s] Starting search for: %s", mpName, query)
 
-			searchResult, err := m.Search(ctx, query, limitPerMarketplace)
+			searchResult, err := m.Search(ctx, query, limitPerMarketplace, city)
 
 			mu.Lock()
 			defer mu.Unlock()
@@ -83,15 +83,16 @@ func (a *Aggregator) Search(ctx context.Context, query string, limitPerMarketpla
 }
 
 // Эта функция (если ты её используешь) тоже получает subscriptionTier
-func (a *Aggregator) SearchCombined(ctx context.Context, query string, limit int, subscriptionTier string) []Product {
-	result := a.Search(ctx, query, limit, subscriptionTier)
+func (a *Aggregator) SearchCombined(ctx context.Context, query string, limit int, subscriptionTier string, city string) []Product {
+	// Прокидываем city внутрь a.Search
+	result := a.Search(ctx, query, limit, subscriptionTier, city)
 
 	var allProducts []Product
 	for _, products := range result.Results {
 		allProducts = append(allProducts, products...)
 	}
 
-	// Сортируем по цене (от меньшей к большей)
+	// Сортируем по цене
 	sort.Slice(allProducts, func(i, j int) bool {
 		return allProducts[i].Price < allProducts[j].Price
 	})

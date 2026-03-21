@@ -28,6 +28,6 @@ type SearchResult struct {
 }
 
 type Marketplace interface {
-	Search(ctx context.Context, query string, limit int) (*SearchResult, error)
+	Search(ctx context.Context, query string, limit int, city string) (*SearchResult, error)
 	GetName() string
 }
