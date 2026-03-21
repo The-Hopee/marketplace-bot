@@ -92,10 +92,22 @@ func (h *Handler) handleMessage(message *tgbotapi.Message) {
 		return
 	}
 
-	// ═══════ 2) Фото ═══════
+	// ═══════ 2) Фото или Документ-картинка ═══════
+	isImage := false
 	if message.Photo != nil && len(message.Photo) > 0 {
+		isImage = true
+	} else if message.Document != nil && strings.HasPrefix(message.Document.MimeType, "image/") {
+		isImage = true
+	}
+
+	if isImage {
 		if state, ok := h.userStates[userID]; ok && state == "waiting_image" {
 			h.handleImageSearch(ctx, message)
+			return
+		} else {
+			// Если юзер кинул фотку просто так (без нажатия кнопки), подскажем ему
+			msg := tgbotapi.NewMessage(message.Chat.ID, "👆 Чтобы искать по фото, сначала нажмите кнопку «📷 Поиск по фото» в меню.")
+			h.bot.Send(msg)
 			return
 		}
 	}
@@ -476,161 +488,195 @@ func (h *Handler) handleImageSearch(ctx context.Context, message *tgbotapi.Messa
 
 	canSearch, _, err := h.subService.CanUserSearch(ctx, userID, subscription.SearchTypeImage)
 	if err != nil || !canSearch {
-		msg := tgbotapi.NewMessage(message.Chat.ID, "❌ У вас закончились бесплатные поиски. Оформите подписку.")
+		msg := tgbotapi.NewMessage(message.Chat.ID, "❌ У вас закончились бесплатные поиски по фото. Оформите подписку.")
 		h.bot.Send(msg)
 		return
 	}
 
-	searchMsg := tgbotapi.NewMessage(message.Chat.ID, "🔍 Ищу товар по изображению...")
+	// 1. Узнаем уровень подписки
+	user, err := h.repo.GetUserByTelegramID(ctx, userID)
+	tier := "free"
+	if err == nil && user != nil {
+		tier = user.GetTier()
+	}
+
+	searchMsg := tgbotapi.NewMessage(message.Chat.ID, "🔍 Распознаю изображение и ищу товары...")
 	sentMsg, _ := h.bot.Send(searchMsg)
 
-	photo := message.Photo[len(message.Photo)-1]
-	file, err := h.bot.GetFile(tgbotapi.FileConfig{FileID: photo.FileID})
+	// 2. ДОСТАЕМ ФАЙЛ (Поддержка и сжатых фото, и документов)
+	var fileID string
+	if message.Photo != nil && len(message.Photo) > 0 {
+		// Берем самое большое качество
+		fileID = message.Photo[len(message.Photo)-1].FileID
+	} else if message.Document != nil {
+		// Если прислали как файл (документ)
+		mime := message.Document.MimeType
+		if strings.HasPrefix(mime, "image/") {
+			fileID = message.Document.FileID
+		}
+	}
+
+	if fileID == "" {
+		h.bot.Request(tgbotapi.NewDeleteMessage(message.Chat.ID, sentMsg.MessageID))
+		msg := tgbotapi.NewMessage(message.Chat.ID, "❌ Пожалуйста, отправьте именно фотографию или картинку.")
+		h.bot.Send(msg)
+		return
+	}
+
+	file, err := h.bot.GetFile(tgbotapi.FileConfig{FileID: fileID})
 	if err != nil {
 		log.Printf("[Handler] Error getting file: %v", err)
 		h.bot.Request(tgbotapi.NewDeleteMessage(message.Chat.ID, sentMsg.MessageID))
-		msg := tgbotapi.NewMessage(message.Chat.ID, "❌ Не удалось загрузить фото")
+		msg := tgbotapi.NewMessage(message.Chat.ID, "❌ Не удалось загрузить фото от Telegram")
 		h.bot.Send(msg)
 		return
 	}
 
 	fileURL := fmt.Sprintf("https://api.telegram.org/file/bot%s/%s", h.cfg.TelegramToken, file.FilePath)
 
+	// 3. Запускаем поиск Яндекса
 	imageResult, err := h.imageSearcher.SearchByImageURL(ctx, fileURL)
-	if err != nil {
-		log.Printf("[Handler] Image search error: %v", err)
-		h.bot.Request(tgbotapi.NewDeleteMessage(message.Chat.ID, sentMsg.MessageID))
-		h.offerManualSearch(message.Chat.ID, userID)
-		return
-	}
-
-	if !imageResult.Success || len(imageResult.Products) == 0 {
+	if err != nil || !imageResult.Success || len(imageResult.Products) == 0 {
+		log.Printf("[Handler] Image search error or empty: %v", err)
 		h.bot.Request(tgbotapi.NewDeleteMessage(message.Chat.ID, sentMsg.MessageID))
 		h.offerManualSearch(message.Chat.ID, userID)
 		return
 	}
 
 	h.subService.UseSearch(ctx, userID, subscription.SearchTypeImage)
-
 	h.bot.Request(tgbotapi.NewDeleteMessage(message.Chat.ID, sentMsg.MessageID))
 
-	aggregatedResult := &marketplace.AggregatedResult{
-		Query: imageResult.Query,
-		Results: map[string][]marketplace.Product{
-			"Wildberries": imageResult.Products,
-		},
-		TotalCount: len(imageResult.Products),
+	// 4. Фильтруем результаты (Авито только для Premium/Pro)
+	var filteredProducts []marketplace.Product
+	for _, p := range imageResult.Products {
+		if p.Marketplace == "Avito" && tier == "free" {
+			continue // Бесплатным юзерам Авито не показываем
+		}
+		filteredProducts = append(filteredProducts, p)
 	}
 
+	// 5. Группируем результаты для агрегатора и ИИ
+	resultsMap := make(map[string][]marketplace.Product)
+	for _, p := range filteredProducts {
+		resultsMap[p.Marketplace] = append(resultsMap[p.Marketplace], p)
+	}
+
+	aggregatedResult := &marketplace.AggregatedResult{
+		Query:      imageResult.Query,
+		Results:    resultsMap,
+		TotalCount: len(filteredProducts),
+	}
+
+	// 6. МАГИЯ PRO-ПОДПИСКИ (AI-АГЕНТ)
+	if tier == "pro" {
+		aiWaitMsg := tgbotapi.NewMessage(message.Chat.ID, "🤖 *AI-Агент* анализирует найденные товары по фото. Подождите пару секунд...")
+		aiWaitMsg.ParseMode = "Markdown"
+		sentWait, _ := h.bot.Send(aiWaitMsg)
+
+		aiResponse, err := h.aiAgent.Analyze(ctx, aggregatedResult)
+		h.bot.Request(tgbotapi.NewDeleteMessage(message.Chat.ID, sentWait.MessageID))
+
+		if err == nil && aiResponse != "" {
+			msg := tgbotapi.NewMessage(message.Chat.ID, "📷 Найдено по изображению:\n\n"+aiResponse)
+			msg.ParseMode = "Markdown"
+			msg.DisableWebPagePreview = true
+			msg.ReplyMarkup = MainMenuKeyboard()
+			h.bot.Send(msg)
+			return
+		}
+		log.Printf("[Handler] AI error fallback for image: %v", err)
+	}
+
+	// 7. ОБЫЧНЫЙ ВЫВОД ДЛЯ FREE И PREMIUM
 	analysisResult := h.analyzer.Analyze(aggregatedResult)
+	h.sendImageSearchResultsWithAnalysis(message.Chat.ID, imageResult.Query, aggregatedResult, analysisResult)
 
-	h.sendImageSearchResultsWithAnalysis(message.Chat.ID, imageResult, analysisResult)
-
-	// ═══════ Проверяем реферальный бонус ═══════
+	// ═══════ Реферальный бонус ═══════
 	bonusGiven, referrerID, _ := h.referralSvc.CheckSearchBonus(ctx, userID)
 	if bonusGiven {
-		bonus := tgbotapi.NewMessage(message.Chat.ID,
-			fmt.Sprintf("🎉 Вы сделали %d поисков! +%d дней подписки по реферальной программе!",
-				service.ReferralSearchTarget, service.ReferralBonusDays))
+		bonus := tgbotapi.NewMessage(message.Chat.ID, fmt.Sprintf("🎉 Вы сделали %d поисков! +%d дней подписки по реф. программе!", service.ReferralSearchTarget, service.ReferralBonusDays))
 		h.bot.Send(bonus)
-
 		if referrerID > 0 {
-			refMsg := tgbotapi.NewMessage(referrerID,
-				fmt.Sprintf("🎯 Ваш приглашённый сделал %d поисков! +%d дней подписки!",
-					service.ReferralSearchTarget, service.ReferralBonusDays))
-			h.bot.Send(refMsg)
+			h.bot.Send(tgbotapi.NewMessage(referrerID, fmt.Sprintf("🎯 Ваш приглашённый сделал %d поисков! +%d дней подписки!", service.ReferralSearchTarget, service.ReferralBonusDays)))
 		}
 	}
 }
-func (h *Handler) sendImageSearchResultsWithAnalysis(chatID int64, result *imagesearch.ImageSearchResult, analysis *analysis.AnalysisResult) {
+
+func (h *Handler) sendImageSearchResultsWithAnalysis(chatID int64, query string, results *marketplace.AggregatedResult, analysis *analysis.AnalysisResult) {
 	var sb strings.Builder
 
-	sb.WriteString("📷 Найдено по изображению\n\n")
-
-	wbCount := 0
-	ozonCount := 0
-	for _, p := range result.Products {
-		if p.Marketplace == "OZON" {
-			ozonCount++
-		} else {
-			wbCount++
-		}
-	}
-
-	sb.WriteString("📊 НАЙДЕНО:\n")
-	if wbCount > 0 {
-		sb.WriteString(fmt.Sprintf("🟣 Wildberries: %d\n", wbCount))
-	}
-	if ozonCount > 0 {
-		sb.WriteString(fmt.Sprintf("🔵 OZON: %d\n", ozonCount))
+	sb.WriteString("📷 *Найдено по изображению*\n")
+	if query != "" {
+		sb.WriteString(fmt.Sprintf("Предположительный запрос: _%s_\n", sanitizeString(query)))
 	}
 	sb.WriteString("\n")
 
+	sb.WriteString("📊 *НАЙДЕНО ТОВАРОВ:*\n")
+	for mpName, products := range results.Results {
+		mpEmoji := "📦"
+		if mpName == "OZON" {
+			mpEmoji = "🔵"
+		} else if mpName == "Wildberries" {
+			mpEmoji = "🟣"
+		} else if mpName == "Avito" {
+			mpEmoji = "🟢"
+		}
+		sb.WriteString(fmt.Sprintf("%s %s: %d шт.\n", mpEmoji, mpName, len(products)))
+	}
+	sb.WriteString("\n")
+
+	// ЛУЧШИЕ ПО ПЛОЩАДКАМ
+	if len(analysis.BestByMarketplace) > 0 {
+		sb.WriteString("🥇 *ЛУЧШИЕ ПО ПЛОЩАДКАМ:*\n\n")
+		for mpName, best := range analysis.BestByMarketplace {
+			mpEmoji := "📦"
+			if mpName == "OZON" {
+				mpEmoji = "🔵"
+			} else if mpName == "Wildberries" {
+				mpEmoji = "🟣"
+			} else if mpName == "Avito" {
+				mpEmoji = "🟢"
+			}
+
+			name := truncateUTF8(sanitizeString(best.Name), 40)
+			sb.WriteString(fmt.Sprintf("%s *%s*\n%s\n", mpEmoji, mpName, name))
+			if best.Price > 0 {
+				sb.WriteString(fmt.Sprintf("💰 %.0f руб.", best.Price))
+				if best.Discount > 0 {
+					sb.WriteString(fmt.Sprintf(" (-%d%%)", best.Discount))
+				}
+				sb.WriteString("\n")
+			} else {
+				sb.WriteString("💰 Цена по запросу\n")
+			}
+			if best.Condition != "" {
+				sb.WriteString(fmt.Sprintf("⚠️ Состояние: %s\n", best.Condition))
+			}
+			sb.WriteString(fmt.Sprintf("🔗 [Перейти к товару](%s)\n\n", best.URL))
+		}
+	}
+
+	// АБСОЛЮТНЫЙ ПОБЕДИТЕЛЬ
 	if analysis.BestOverall != nil {
-		sb.WriteString("🏆 ЛУЧШИЙ ВЫБОР:\n")
+		sb.WriteString("🏆 *АБСОЛЮТНО ЛУЧШИЙ ВЫБОР:*\n")
 		best := analysis.BestOverall
-
-		mpEmoji := "📦"
-		if best.Marketplace == "OZON" {
-			mpEmoji = "🔵"
-		} else if best.Marketplace == "Wildberries" {
-			mpEmoji = "🟣"
-		}
-
 		name := truncateUTF8(sanitizeString(best.Name), 45)
-		sb.WriteString(fmt.Sprintf("%s %s\n", mpEmoji, name))
-		sb.WriteString(fmt.Sprintf("💰 %.0f руб.", best.Price))
-		if best.Discount > 0 {
-			sb.WriteString(fmt.Sprintf(" (-%d%%)", best.Discount))
-		}
-		sb.WriteString(fmt.Sprintf(" — %s\n", best.Reason))
-		sb.WriteString(fmt.Sprintf("%s\n\n", best.URL))
+		sb.WriteString(fmt.Sprintf("%s\n💰 %.0f руб.\n🔗 [Смотреть](%s)\n\n", name, best.Price, best.URL))
 	}
 
-	sb.WriteString("💰 ЦЕНЫ:\n")
-	sb.WriteString(fmt.Sprintf("• Мин: %.0f руб.\n", analysis.PriceStats.MinPrice))
-	sb.WriteString(fmt.Sprintf("• Средняя: %.0f руб.\n", analysis.PriceStats.AvgPrice))
-	sb.WriteString("\n")
-
-	showCount := len(analysis.TopProducts)
-	if showCount > 5 {
-		showCount = 5
+	text := sb.String()
+	if !utf8.ValidString(text) {
+		text = sanitizeString(text)
 	}
 
-	sb.WriteString(fmt.Sprintf("📦 ТОП-%d:\n\n", showCount))
-
-	for i := 0; i < showCount; i++ {
-		p := analysis.TopProducts[i]
-
-		mpEmoji := "📦"
-		if p.Marketplace == "OZON" {
-			mpEmoji = "🔵"
-		} else if p.Marketplace == "Wildberries" {
-			mpEmoji = "🟣"
-		}
-
-		name := truncateUTF8(sanitizeString(p.Name), 38)
-		sb.WriteString(fmt.Sprintf("%d. %s %s\n", i+1, mpEmoji, name))
-		sb.WriteString(fmt.Sprintf("   💰 %.0f руб.", p.Price))
-		if p.Discount > 0 {
-			sb.WriteString(fmt.Sprintf(" -%d%%", p.Discount))
-		}
-		sb.WriteString(fmt.Sprintf(" (скор: %.0f)\n", p.Score))
-		sb.WriteString(fmt.Sprintf("   %s\n\n", p.URL))
-	}
-
-	remaining := len(result.Products) - showCount
-	if remaining > 0 {
-		sb.WriteString(fmt.Sprintf("...и ещё %d товаров\n", remaining))
-	}
-
-	msg := tgbotapi.NewMessage(chatID, sb.String())
+	msg := tgbotapi.NewMessage(chatID, text)
+	msg.ParseMode = "Markdown"
 	msg.DisableWebPagePreview = true
 	msg.ReplyMarkup = MainMenuKeyboard()
 
 	_, err := h.bot.Send(msg)
 	if err != nil {
-		log.Printf("[Handler] Error sending: %v", err)
+		log.Printf("[Handler] Error sending image results: %v", err)
 	}
 }
 
