@@ -867,43 +867,82 @@ func (h *Handler) handleReferral(ctx context.Context, message *tgbotapi.Message)
 	h.bot.Send(m)
 }
 
-// ==================== 👤 Профиль ====================
+// ==================== 👥 Рефералы ====================
 
-func (h *Handler) handleProfile(ctx context.Context, message *tgbotapi.Message) {
+func (h *Handler) handleReferral(ctx context.Context, message *tgbotapi.Message) {
 	userID := message.From.ID
-	user, err := h.repo.GetUserByTelegramID(ctx, userID)
+
+	// Проверяем, является ли пользователь админом
+	isAdmin := false
+	if userID == h.cfg.AdminTelegramID {
+		isAdmin = true
+	}
+
+	canUse, daysLeft, err := h.referralSvc.CanUseReferral(ctx, userID)
 	if err != nil {
+		h.bot.Send(tgbotapi.NewMessage(message.Chat.ID, "❌ Ошибка загрузки рефералов"))
 		return
 	}
 
-	subStatus := fmt.Sprintf("❌ Нет (осталось %d поисков)", user.FreeSearchesLeft)
-	if user.HasActiveSubscription() {
-		subStatus = "✅ " + user.GetTier()
+	// Если это НЕ админ и нужно еще подождать — показываем заглушку
+	if !isAdmin && daysLeft > 0 {
+		text := fmt.Sprintf("⏳ Реферальная программа откроется через <b>%d дн.</b>\n\n"+
+			"Пользуйтесь ботом, и скоро вы сможете приглашать друзей!", daysLeft)
+		m := tgbotapi.NewMessage(message.Chat.ID, text)
+		m.ParseMode = "HTML"
+		h.bot.Send(m)
+		return
 	}
 
-	cityText := "Не указан (Поиск по всей РФ)"
-	if user.City != "" {
-		cityText = user.City
+	link := h.referralSvc.GetReferralLink(userID)
+	total, searchBonuses, _ := h.referralSvc.GetStats(ctx, userID)
+
+	slotsLeft := service.ReferralMaxInvites - total
+	if slotsLeft < 0 {
+		slotsLeft = 0
 	}
 
-	text := fmt.Sprintf(`👤 *Ваш Профиль*
+	// Для админа показываем бесконечное количество слотов
+	if isAdmin {
+		slotsLeft = 9999
+	}
 
-Имя: %s %s
-Поисков выполнено: %d
-Подписка: %s
-📍 *Ваш город:* %s`, user.FirstName, user.LastName, user.SearchCount, subStatus, cityText)
+	limitText := ""
+	if !isAdmin && !canUse && daysLeft == 0 {
+		limitText = "\n\n⚠️ <i>Лимит приглашений исчерпан</i>"
+	}
 
-	msg := tgbotapi.NewMessage(message.Chat.ID, text)
-	msg.ParseMode = "Markdown"
+	maxInvites := service.ReferralMaxInvites
+	if isAdmin {
+		maxInvites = 9999
+	}
 
-	// Добавляем инлайн-кнопку для изменения города
-	keyboard := tgbotapi.NewInlineKeyboardMarkup(
-		tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData("📍 Установить мой город", "set_city"),
-		),
-	)
-	msg.ReplyMarkup = keyboard
-	h.bot.Send(msg)
+	// ИСПОЛЬЗУЕМ HTML ТЕГИ ВМЕСТО MARKDOWN (<b> вместо *, <i> вместо _)
+	text := fmt.Sprintf(`👥 <b>Реферальная программа</b>
+
+🔗 Ваша ссылка:
+%s
+
+📊 <b>Статистика:</b>
+👤 Приглашено: %d/%d
+🎯 Активных (20+ поисков): %d
+📭 Осталось слотов: %d
+
+💎 <b>Бонусы:</b>
+• +%d дней вам и другу за регистрацию
+• +%d дней вам и другу за 20 поисков%s`,
+		link, total, maxInvites, searchBonuses, slotsLeft,
+		service.ReferralBonusDays, service.ReferralBonusDays, limitText)
+
+	m := tgbotapi.NewMessage(message.Chat.ID, text)
+	m.ParseMode = "HTML"           // ПЕРЕКЛЮЧИЛИ НА HTML
+	m.DisableWebPagePreview = true // Чтобы ссылка не разворачивалась в огромное превью
+
+	// Ловим и выводим ошибку, если Телеграм почему-то не принял сообщение
+	_, err = h.bot.Send(m)
+	if err != nil {
+		log.Printf("[Referral] CRITICAL Error sending message: %v", err)
+	}
 }
 
 // ==================== ❓ Помощь ====================
