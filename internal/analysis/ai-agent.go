@@ -95,7 +95,7 @@ func (a *AIAgent) Analyze(ctx context.Context, result *marketplace.AggregatedRes
 - Объем: 500-800 символов - информативно, но лаконично`
 
 	req := openai.ChatCompletionRequest{
-		Model: "gemini-2.0-flash", // Gemini 2.0 Flash через ProxyAPI
+		Model: "google/gemini-2.0-flash", // Gemini 2.0 Flash через ProxyAPI
 		Messages: []openai.ChatCompletionMessage{
 			{
 				Role:    openai.ChatMessageRoleSystem,
