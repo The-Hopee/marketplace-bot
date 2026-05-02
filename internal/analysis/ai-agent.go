@@ -18,8 +18,8 @@ type AIAgent struct {
 
 func NewAIAgent(apiKey string, baseURL string) *AIAgent {
 	config := openai.DefaultConfig(apiKey)
-	// Если используешь российский прокси (например, ProxyAPI), переопределяем BaseURL
-	if baseURL != "" && baseURL != "https://api.openai.com/v1" {
+	// Используем ProxyAPI URL для маршрутизации на Gemini
+	if baseURL != "" {
 		config.BaseURL = baseURL
 	}
 
@@ -50,11 +50,8 @@ func (a *AIAgent) Analyze(ctx context.Context, result *marketplace.AggregatedRes
 		for i := 0; i < limit; i++ {
 			p := products[i]
 
-			// МЫ БОЛЬШЕ НЕ УДАЛЯЕМ ТОВАРЫ С НУЛЕВОЙ ЦЕНОЙ!
-			// ИИ сам разберется.
-
 			cp := CompactProduct{
-				Name:        truncateUTF8(p.Name, 100), // Увеличили длину для большей информативности
+				Name:        truncateUTF8(p.Name, 100),
 				Price:       p.Price,
 				Discount:    p.Discount,
 				URL:         p.URL,
@@ -74,18 +71,31 @@ func (a *AIAgent) Analyze(ctx context.Context, result *marketplace.AggregatedRes
 		return "", fmt.Errorf("failed to marshal data for AI: %w", err)
 	}
 
-	systemPrompt := `Ты — профессиональный шопинг-ассистент и аналитик маркетплейсов.
+	systemPrompt := `Ты — профессиональный шопинг-ассистент и аналитик маркетплейсов с острым чувством юмора.
 Твоя задача: проанализировать предоставленный JSON с товарами (Wildberries, Ozon, Avito).
-ВАЖНЫЕ ПРАВИЛА:
+СТИЛЬ ОТВЕТА:
+- Будь эмоциональным и энтузиастичным! 🔥
+- Используй яркие, запоминающиеся фразы
+- Добавляй уместный юмор и эмпатию
+- Будь честным о достоинствах и недостатках
+
+ПРАВИЛА АНАЛИЗА:
 1. Если пользователь ищет дорогую технику (смартфон, ноутбук), а в списке есть дешевые чехлы, стекла, коробки или аксессуары — ИГНОРИРУЙ ИХ! Анализируй только саму технику.
-2. Если у товара Price равна 0, это значит цена не указана в предпросмотре. Не выкидывай товар! Просто напиши "Цена по запросу на сайте".
+2. Если у товара Price равна 0, это значит цена не указана в предпросмотре. Не выкидывай товар! Просто напиши "Цена по запросу".
 3. Выбери САМЫЙ ЛУЧШИЙ товар среди конкретного маркетплейса.
 4. Выбери АБСОЛЮТНО ЛУЧШИЙ товар среди ВСЕХ маркетплейсов и обоснуй выбор.
 5. Если лучший товар с Avito, ОЩУТИМО сделай акцент на его состоянии ("Новое" или "Б/У").
-Отвечай структурированно, используй эмодзи (📦, 💰, ⚠️, 🏆). В конце приложи ссылки на победителей. Не пиши код или сырой JSON в ответе.`
+6. Сравни товары по цене, скидке, репутации маркетплейса - но главное - помогай пользователю принять умное решение.
+
+ФОРМАТ ОТВЕТА:
+- Структурированный и читаемый
+- Используй эмодзи (📦, 💰, ⚠️, 🏆, 😍, 🎯) но не переборщи
+- В конце приложи ссылки на победителей
+- Не пиши код или сырой JSON в ответе
+- Объем: 500-800 символов - информативно, но лаконично`
 
 	req := openai.ChatCompletionRequest{
-		Model: "gpt-4o-mini", // Дешево и круто
+		Model: "gemini-2.0-flash", // Gemini 2.0 Flash через ProxyAPI
 		Messages: []openai.ChatCompletionMessage{
 			{
 				Role:    openai.ChatMessageRoleSystem,
@@ -99,18 +109,18 @@ func (a *AIAgent) Analyze(ctx context.Context, result *marketplace.AggregatedRes
 		Temperature: 0.7,
 	}
 
-	log.Printf("[AIAgent] Sending request to OpenAI for query: %s", result.Query)
+	log.Printf("[AIAgent] Sending request to Gemini 2.0 Flash (via ProxyAPI) for query: %s", result.Query)
 
 	resp, err := a.client.CreateChatCompletion(ctx, req)
 	if err != nil {
-		log.Printf("[AIAgent] Error calling OpenAI: %v", err)
+		log.Printf("[AIAgent] Error calling ProxyAPI/Gemini: %v", err)
 		return "", fmt.Errorf("ошибка при анализе ИИ: %w", err)
 	}
 
 	return resp.Choices[0].Message.Content, nil
 }
 
-// Вспомогательные функции (аналогичные тем, что в handler.go)
+// Вспомогательные функции
 func min(a, b int) int {
 	if a < b {
 		return a

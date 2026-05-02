@@ -24,8 +24,8 @@ services:
       - SUBSCRIPTION_PRICE=${SUBSCRIPTION_PRICE}
       - PRO_SUBSCRIPTION_PRICE=${PRO_SUBSCRIPTION_PRICE}
       - XMLRIVER_URL=${XMLRIVER_URL}
-      - OPENAI_KEY=${OPENAI_KEY}
-      - OPENAI_BASE_URL=${OPENAI_BASE_URL}
+      - PROXYAPI_KEY=${PROXYAPI_KEY}
+      - PROXYAPI_URL=${PROXYAPI_URL}
     volumes:
       - ./debug_html:/app/debug_html 
     ports:

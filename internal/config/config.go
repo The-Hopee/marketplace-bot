@@ -25,8 +25,8 @@ type Config struct {
 	AdminTelegramID      int64
 
 	XMLRiverURL   string
-	OpenAIKey     string
-	OpenAIBaseURL string
+	ProxyAPIKey   string
+	ProxyAPIURL   string
 }
 
 func Load() (*Config, error) {
@@ -37,9 +37,6 @@ func Load() (*Config, error) {
 	days, _ := strconv.Atoi(getEnv("SUBSCRIPTION_DAYS", "30"))
 	cacheTTL, _ := strconv.Atoi(getEnv("CACHE_TTL_MINUTES", "30"))
 	ID, _ := strconv.ParseInt(os.Getenv("ADMIN_TELEGRAM_ID"), 10, 64)
-
-	// Дефолтный URL OpenAI, но если используешь прокси - берем из .env
-	aiBaseURL := getEnv("OPENAI_BASE_URL", "https://api.openai.com/v1")
 
 	return &Config{
 		TelegramToken:        os.Getenv("TELEGRAM_TOKEN"),
@@ -56,8 +53,8 @@ func Load() (*Config, error) {
 		ServerPort:           getEnv("SERVER_PORT", "8080"),
 		AdminTelegramID:      ID,
 		XMLRiverURL:          os.Getenv("XMLRIVER_URL"),
-		OpenAIKey:            os.Getenv("OPENAI_KEY"),
-		OpenAIBaseURL:        aiBaseURL,
+		ProxyAPIKey:          os.Getenv("PROXYAPI_KEY"),
+		ProxyAPIURL:          getEnv("PROXYAPI_URL", "https://api.proxyapi.ru/openai/v1"),
 	}, nil
 }
 

@@ -61,8 +61,8 @@ func New(cfg *config.Config, db *database.DB, redisCache *cache.RedisCache) (*Bo
 	// Агрегатор (передаем URL от XMLRiver)
 	aggregator := marketplace.NewAggregator(cfg.XMLRiverURL)
 
-	// Инициализируем AI-Агента
-	aiAgent := analysis.NewAIAgent(cfg.OpenAIKey, cfg.OpenAIBaseURL)
+	// Инициализируем AI-Агента (Gemini через ProxyAPI)
+	aiAgent := analysis.NewAIAgent(cfg.ProxyAPIKey, cfg.ProxyAPIURL)
 
 	// Основной хендлер (добавили aiAgent)
 	handler := NewHandler(api, repo, aggregator, subService, redisCache, cfg,
